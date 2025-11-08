@@ -1,0 +1,22 @@
+# Dependency directories
+node_modules/ [citation:2][citation:3][citation:7]
+
+# Environment variables and sensitive data
+.env [citation:2][citation:7]
+.env.local
+.env.production.local
+
+# Log files
+*.log [citation:3][citation:7]
+
+# Runtime data and cache
+.npm
+.cache
+
+# IDE and editor files
+.vscode/ [citation:2]
+.idea/
+
+# OS generated files [citation:2][citation:3]
+.DS_Store [citation:2][citation:3]
+Thumbs.db [citation:3]
