@@ -1,32 +1,46 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/database');
 
-const otpSchema = mongoose.Schema({
+const OTP = sequelize.define('OTP', {
+  id: {
+    type: DataTypes.UUID,
+    defaultValue: DataTypes.UUIDV4,
+    primaryKey: true
+  },
   email: {
-    type: String,
-    required: true,
-    lowercase: true
+    type: DataTypes.STRING,
+    allowNull: false,
+    validate: {
+      isEmail: true
+    }
   },
   otp: {
-    type: String,
-    required: true
+    type: DataTypes.STRING(6),
+    allowNull: false
   },
   expiresAt: {
-    type: Date,
-    required: true
+    type: DataTypes.DATE,
+    allowNull: false
   },
   isUsed: {
-    type: Boolean,
-    default: false
+    type: DataTypes.BOOLEAN,
+    defaultValue: false
   },
   attemptCount: {
-    type: Number,
-    default: 0
+    type: DataTypes.INTEGER,
+    defaultValue: 0
   }
 }, {
-  timestamps: true
+  tableName: 'otps',
+  indexes: [
+    {
+      fields: ['email']
+    },
+    {
+      fields: ['expiresAt']
+    }
+  ]
 });
 
-// Auto-delete expired OTPs after 1 hour
-otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 3600 });
-
-module.exports = mongoose.model('OTP', otpSchema);
+// Auto-delete expired OTPs (handled by database cleanup job)
+module.exports = OTP;
