@@ -6,7 +6,7 @@ const { sendOTPEmail, sendWelcomeEmail, sendPasswordResetEmail } = require('../u
 const { createOTP, verifyOTP } = require('../utils/otpService');
 const { protect } = require('../middleware/auth');
 
-// Initialize router - THIS LINE WAS MISSING!
+
 const router = express.Router();
 
 // Generate JWT Token
@@ -20,13 +20,8 @@ const isValidEmail = (email) => {
   return emailRegex.test(email);
 };
 
-// =======================
 // PASSWORD AUTHENTICATION
-// =======================
 
-// @desc    Register new user with name/password
-// @route   POST /api/auth/register
-// @access  Public
 router.post('/register', async (req, res) => {
   try {
     const { name, email, password } = req.body;
@@ -53,7 +48,7 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Check if user already exists
+    // to check if user already exists
     const existingUser = await User.findOne({
       where: { 
         email: email.toLowerCase() 
@@ -67,7 +62,7 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // Create user
+    // create user function
     const user = await User.create({
       name: name.trim(),
       email: email.toLowerCase(),
@@ -115,9 +110,9 @@ router.post('/register', async (req, res) => {
   }
 });
 
-// @desc    Login with password
-// @route   POST /api/auth/login
-// @access  Public
+//     Login with password
+//  POST /api/auth/login
+//  Public
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -140,7 +135,7 @@ router.post('/login', async (req, res) => {
     });
     
     if (user && (await user.matchPassword(password))) {
-      // Update last login
+      // to updating last login
       await user.update({ lastLogin: new Date() });
 
       const token = generateToken(user.id);
@@ -177,12 +172,12 @@ router.post('/login', async (req, res) => {
 });
 
 // =======================
-// PASSWORD RESET FLOW
+// PASSWORD RESET logic
 // =======================
 
-// @desc    Forgot password - request reset
-// @route   POST /api/auth/forgot-password
-// @access  Public
+//    Forgot password - request reset
+//    POST /api/auth/forgot-password
+//   Public
 router.post('/forgot-password', async (req, res) => {
   try {
     const { email } = req.body;
@@ -203,7 +198,7 @@ router.post('/forgot-password', async (req, res) => {
     });
     
     if (!user) {
-      // Don't reveal if user exists or not for security
+      // won't reveal if user exists or not for security
       return res.json({
         success: true,
         message: 'If an account with that email exists, a reset code has been sent'
@@ -245,9 +240,9 @@ router.post('/forgot-password', async (req, res) => {
   }
 });
 
-// @desc    Reset password with OTP
-// @route   POST /api/auth/reset-password
-// @access  Public
+//    Reset password with OTP
+//    POST /api/auth/reset-password
+//   Public
 router.post('/reset-password', async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
@@ -311,9 +306,9 @@ router.post('/reset-password', async (req, res) => {
 // OTP AUTHENTICATION
 // =======================
 
-// @desc    Request OTP for registration
-// @route   POST /api/auth/email/register
-// @access  Public
+//   Request OTP for registration
+//    POST /api/auth/email/register
+//  Public
 router.post('/email/register', async (req, res) => {
   try {
     const { email, name } = req.body;
@@ -382,9 +377,9 @@ router.post('/email/register', async (req, res) => {
   }
 });
 
-// @desc    Verify OTP and complete registration
-// @route   POST /api/auth/email/verify
-// @access  Public
+//     Verify OTP and complete registration
+//    POST /api/auth/email/verify
+//  Public
 router.post('/email/verify', async (req, res) => {
   try {
     const { email, name, otp } = req.body;
@@ -414,7 +409,7 @@ router.post('/email/verify', async (req, res) => {
       });
     }
 
-    // Create user (no password for OTP-based auth)
+    // Create user (no password for OTP-based auth), the user will be made if otp was used
     const user = await User.create({
       name: name.trim(),
       email: email.toLowerCase(),
@@ -473,9 +468,9 @@ router.post('/email/verify', async (req, res) => {
   }
 });
 
-// @desc    Request OTP for login
-// @route   POST /api/auth/email/login
-// @access  Public
+//     Request OTP for login
+//    POST /api/auth/email/login
+//   Public
 router.post('/email/login', async (req, res) => {
   try {
     const { email } = req.body;
@@ -539,9 +534,9 @@ router.post('/email/login', async (req, res) => {
   }
 });
 
-// @desc    Verify OTP for login
-// @route   POST /api/auth/email/verify-login
-// @access  Public
+//     Verify OTP for login
+//   POST /api/auth/email/verify-login
+//   Public
 router.post('/email/verify-login', async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -606,9 +601,8 @@ router.post('/email/verify-login', async (req, res) => {
   }
 });
 
-// =======================
+
 // COMMON ROUTES
-// =======================
 
 // @desc    Get user profile
 // @route   GET /api/auth/profile
@@ -637,9 +631,9 @@ router.get('/profile', protect, async (req, res) => {
   }
 });
 
-// @desc    Check authentication status
-// @route   GET /api/auth/status
-// @access  Private
+//    Check authentication status
+// GET /api/auth/status
+//   Private
 router.get('/status', protect, async (req, res) => {
   try {
     const user = await User.findByPk(req.user.id);
