@@ -52,7 +52,7 @@ const verifyOTP = (email, otp) => {
     return { isValid: false, message: 'Invalid OTP' };
   }
   
-  // OTP is valid - remove it
+  
   otpStore.delete(email);
   return { isValid: true, message: 'OTP verified successfully' };
 };
