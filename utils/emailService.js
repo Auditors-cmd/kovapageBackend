@@ -1,6 +1,6 @@
 const nodemailer = require('nodemailer');
 
-// Create transporter with REAL Gmail credentials
+// Create transporter with Gmail credentials
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
@@ -54,7 +54,7 @@ const sendOTPEmail = async (email, otp, userName = 'User') => {
                     <div class="otp-code">${otp}</div>
                     
                     <div class="warning">
-                        <strong>⚠️ Important Security Notice:</strong><br>
+                        <strong> Important Security Notice:</strong><br>
                         This code will expire in 10 minutes. Do not share this code with anyone.
                     </div>
                     
@@ -70,11 +70,11 @@ const sendOTPEmail = async (email, otp, userName = 'User') => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ REAL OTP email sent to ${email}`);
+    console.log(`REAL OTP email sent to ${email}`);
     console.log(`Message ID: ${info.messageId}`);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error(`❌ Failed to send OTP to ${email}:`, error.message);
+    console.error(` Failed to send OTP to ${email}:`, error.message);
     return { 
       success: false, 
       error: error.message
@@ -115,11 +115,11 @@ const sendWelcomeEmail = async (email, userName = 'User') => {
                     <p style="margin: 10px 0 0 0; opacity: 0.9; font-size: 18px;">Audit App</p>
                 </div>
                 <div class="content">
-                    <div class="welcome-icon">🎉</div>
+                
                     <div class="welcome-text">Welcome to KovaPage, ${userName}!</div>
                     
                     <div class="success-message">
-                        <strong>✅ Email Verified Successfully!</strong><br>
+                        <strong>Email Verified Successfully!</strong><br>
                         Your email address has been verified and your account is now active.
                     </div>
                     
@@ -153,11 +153,11 @@ const sendWelcomeEmail = async (email, userName = 'User') => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log(`✅ Welcome email sent to ${email}`);
+    console.log(` Welcome email sent to ${email}`);
     console.log(`Welcome Message ID: ${info.messageId}`);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error(`❌ Failed to send welcome email to ${email}:`, error.message);
+    console.error(` Failed to send welcome email to ${email}:`, error.message);
     return { 
       success: false, 
       error: error.message
@@ -200,7 +200,7 @@ const sendPasswordResetEmail = async (email, resetToken, userName = 'User') => {
                     <div class="reset-code">${resetToken}</div>
                     
                     <div class="warning">
-                        <strong>⚠️ Important Security Notice:</strong><br>
+                        <strong>Important Security Notice:</strong><br>
                         This reset code will expire in 10 minutes. Do not share this code with anyone.
                     </div>
                     
@@ -209,7 +209,7 @@ const sendPasswordResetEmail = async (email, resetToken, userName = 'User') => {
                     <p>Need help? Contact our support team at support@kovapage.com</p>
                 </div>
                 <div class="footer">
-                    <p>&copy; 2024 KovaPage Audit App. All rights reserved.</p>
+                    <p>&copy; 2026 KovaPage Audit App. All rights reserved, hopefully.</p>
                 </div>
             </div>
         </body>
@@ -222,7 +222,7 @@ const sendPasswordResetEmail = async (email, resetToken, userName = 'User') => {
     console.log(`Reset Message ID: ${info.messageId}`);
     return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error(`❌ Failed to send password reset email to ${email}:`, error.message);
+    console.error(` Failed to send password reset email to ${email}:`, error.message);
     return { 
       success: false, 
       error: error.message
