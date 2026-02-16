@@ -4,12 +4,15 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
+console.log('🔍 DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('🔍 NODE_ENV:', process.env.NODE_ENV);
 const { sequelize, testConnection } = require('./config/database');
 const authRoutes = require('./routes/auth');
 const { swaggerUi, swaggerDocument, swaggerOptions } = require('./swagger');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
 
 // DATABASE INITIALIZATION
 
@@ -103,6 +106,7 @@ app.get('/api/health', async (req, res) => {
     
     res.json({ 
       status: 'OK',
+
       message: 'KovaPage API with PostgreSQL is running!',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
