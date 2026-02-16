@@ -89,4 +89,16 @@ User.prototype.toJSON = function() {
   return values;
 };
 
+// to add association method
+User.associate = (models) => {
+  // if a user could  have multiple OTPs
+  User.hasMany(models.OTP, {
+    foreignKey: 'email',
+    sourceKey: 'email',
+    as: 'otps',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE'
+  });
+};
+
 module.exports = User;

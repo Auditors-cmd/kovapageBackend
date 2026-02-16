@@ -42,5 +42,16 @@ const OTP = sequelize.define('OTP', {
   ]
 });
 
+// to add association method
+OTP.associate = (models) => {
+  // An OTP belongs to a user
+  OTP.belongsTo(models.User, {
+    foreignKey: 'email',
+    targetKey: 'email',
+    as: 'user',
+    onDelete: 'CASCADE',
+    onUpdate: 'CASCADE'
+  });
+};
 // Auto-delete expired OTPs (handled by database cleanup job)
 module.exports = OTP;
