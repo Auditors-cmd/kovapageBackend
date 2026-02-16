@@ -19,4 +19,5 @@ node_modules/ [citation:2][citation:3][citation:7]
 
 # OS generated files [citation:2][citation:3]
 .DS_Store [citation:2][citation:3]
-Thumbs.db [citation:3]
+Thumbs.db [citation:3].env
+.env.*
