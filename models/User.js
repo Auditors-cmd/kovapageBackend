@@ -116,22 +116,22 @@ const User = sequelize.define('User', {
     {
       fields: ['email']
     },
-   // {
-   //   fields: ['role']
-   // },
-   // {
-     // fields: ['department']
-   // },
-   // {
-    //  fields: ['employeeId'],
-    //  unique: true
-   // },
-   // {
-   //   fields: ['reportsTo']
-   // },
-   // {
-   //   fields: ['isActive']
-  //  }
+    {
+      fields: ['role']
+    },
+    {
+      fields: ['department']
+    },
+    {
+      fields: ['employeeId'],
+      unique: true
+    },
+    {
+      fields: ['reportsTo']
+    },
+    {
+      fields: ['isActive']
+ }
   ],
   hooks: {
     beforeCreate: async (user) => {
