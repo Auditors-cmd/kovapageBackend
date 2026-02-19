@@ -28,6 +28,10 @@ Complete audit management system with 8 specialized user roles, OTP and password
 - **Password Authentication**: Traditional email/password registration and login
 - **Password Reset**: Secure OTP-based password reset flow
 
+## Password Requirements
+- **Minimum Length**: 8 characters
+- **Mix of letters & numbers recommended**
+
 ## Database
 - **PostgreSQL**: Relational database for user management
 - **UUID Primary Keys**: Secure user identification
@@ -161,7 +165,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
             type: 'string',
             format: 'password',
             example: 'password123',
-            description: 'User password (min 6 characters)'
+            description: 'User password (min 8 characters)'
           },
           profilePhoto: {
             type: 'string',
@@ -301,7 +305,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
             type: 'string',
             format: 'password',
             example: 'password123',
-            description: 'User password (min 6 characters)'
+            description: 'User password (min 8 characters)'
           }
         },
         example: {
@@ -365,7 +369,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
             type: 'string',
             format: 'password',
             example: 'newpassword123',
-            description: 'New password (min 6 characters)'
+            description: 'New password (min 8 characters)'
           }
         },
         example: {
@@ -395,7 +399,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
             type: 'string',
             format: 'password',
             example: 'password123',
-            description: 'Optional password (if not provided, OTP auth will be used)'
+            description: 'Optional password - if not provided, OTP auth will be used (min 8 chars if provided)'
           },
           role: {
             $ref: '#/components/schemas/UserRole'
@@ -986,7 +990,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/register': {
       post: {
         summary: 'Register with Password and Profile Photo',
-        description: 'Register a new user with email, password, and optional profile photo',
+        description: 'Register a new user with email, password (min 8 characters), and optional profile photo',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -1029,7 +1033,18 @@ Complete audit management system with 8 specialized user roles, OTP and password
             }
           },
           '400': {
-            $ref: '#/components/responses/BadRequest'
+            description: 'Bad request - validation failed (password must be at least 8 characters)',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/Error'
+                },
+                example: {
+                  success: false,
+                  message: 'Password must be at least 8 characters'
+                }
+              }
+            }
           },
           '500': {
             $ref: '#/components/responses/ServerError'
@@ -1408,7 +1423,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/reset-password': {
       post: {
         summary: 'Reset Password',
-        description: 'Reset password using OTP',
+        description: 'Reset password using OTP. New password must be at least 8 characters.',
         tags: ['Password Reset'],
         requestBody: {
           required: true,
@@ -1435,7 +1450,20 @@ Complete audit management system with 8 specialized user roles, OTP and password
               }
             }
           },
-          '400': { $ref: '#/components/responses/BadRequest' },
+          '400': {
+            description: 'Bad request - password must be at least 8 characters',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/Error'
+                },
+                example: {
+                  success: false,
+                  message: 'Password must be at least 8 characters long'
+                }
+              }
+            }
+          },
           '500': { $ref: '#/components/responses/ServerError' }
         }
       }
@@ -1709,7 +1737,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/admin/create-user': {
       post: {
         summary: 'Create User with Role (Admin Only)',
-        description: 'Create a new user with specific role. Requires BAC/Secretariat or higher.',
+        description: 'Create a new user with specific role. Password must be at least 8 characters if provided.',
         tags: ['Admin'],
         security: [{ bearerAuth: [] }],
         requestBody: {

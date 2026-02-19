@@ -85,7 +85,7 @@ router.post('/register', upload.single('profilePhoto'), async (req, res) => {
       if (profilePhoto) fs.unlinkSync(profilePhoto.path);
       return res.status(400).json({
         success: false,
-        message: 'Password must be at least 6 characters'
+        message: 'Password must be at least 8 characters'
       });
     }
 

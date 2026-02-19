@@ -33,8 +33,8 @@ const User = sequelize.define('User', {
     allowNull: true, // Allow null for OTP users
     validate: {
       len: {
-        args: [6, 100],
-        msg: 'Password must be at least 6 characters'
+        args: [8, 100],
+        msg: 'Password must be at least 8 characters'
       }
     }
   },
