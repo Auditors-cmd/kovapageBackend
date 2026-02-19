@@ -7,24 +7,72 @@ require('dotenv').config();
 
 console.log('🔍 DATABASE_URL exists:', !!process.env.DATABASE_URL);
 console.log('🔍 NODE_ENV:', process.env.NODE_ENV);
+
+// =====================================================
+// DATABASE CONNECTION
+// =====================================================
 const { sequelize, testConnection } = require('./config/database');
+
+const User = require('./models/User');
+const OTP = require('./models/OTP');
+const RiskAssessment = require('./models/RiskAssessment');
+const AuditPlan = require('./models/AuditPlan');
+const MonitoringDashboard = require('./models/MonitoringDashboard');
+const AuditPlanTeamMember = require('./models/AuditPlanTeamMember');
+const DashboardShare = require('./models/DashboardShare');
+
+// =====================================================
+// SET UP ASSOCIATIONS
+// =====================================================
+// This ensures all relationships between models are properly configured
+const setupAssociations = () => {
+  // User associations
+  if (User.associate) {
+    User.associate({
+      OTP,
+      RiskAssessment,
+      AuditPlan,
+      MonitoringDashboard,
+      AuditPlanTeamMember,
+      DashboardShare
+    });
+  }
+  
+  // Add other model associations here if needed
+  if (AuditPlan.associate) {
+    AuditPlan.associate({ User, RiskAssessment, AuditPlanTeamMember });
+  }
+  
+  if (MonitoringDashboard.associate) {
+    MonitoringDashboard.associate({ User, DashboardShare });
+  }
+};
+
+// Run associations setup
+setupAssociations();
+
 const authRoutes = require('./routes/auth');
 const { swaggerUi, swaggerDocument, swaggerOptions } = require('./swagger');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-
-// DATABASE ...this is with sequelize
-
+// =====================================================
+// DATABASE INITIALIZATION
+// =====================================================
 const initializeDatabase = async () => {
   try {
     // Test connection
     await testConnection();
     
- 
-    await sequelize.sync({ force: false}); // we shall use { force: true } only in development to drop tables
+    // IMPORTANT: Change to { alter: true } to add missing tables without dropping data
+    await sequelize.sync({ alter: true }); // This will add missing tables/columns
     console.log('✅ PostgreSQL tables synced successfully');
+    
+    // Log which tables were created/updated
+    const tables = await sequelize.getQueryInterface().showAllTables();
+    console.log('📊 Available tables:', tables.join(', '));
+    
   } catch (error) {
     console.error('❌ Database initialization error:', error);
     process.exit(1);
@@ -34,26 +82,24 @@ const initializeDatabase = async () => {
 // Initialize database
 initializeDatabase();
 
-// SECURITY MIDDLEWARE
+// =====================================================
+// MIDDLEWARE
+// =====================================================
 app.use(helmet());
 
-app.use('/api/qa', qaRoutes);
-
 // CORS CONFIGURATION (ALLOWS ALL ORIGINS)
-
 app.use(cors({
-  origin: '*', // Allow all origins (simplest for development)
+  origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// Optional,althoughb this will help log CORS requests for debugging, just incase...
+// Additional CORS headers
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
   
-  // Handle preflight requests
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
@@ -73,13 +119,16 @@ const authLimiter = rateLimit({
 });
 app.use('/api/auth/', authLimiter);
 
+// =====================================================
+// ROUTES
+// =====================================================
+app.use('/api/qa', qaRoutes);
+app.use('/api/auth', authRoutes);
 
 // SWAGGER DOCUMENTATION
-
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOptions));
 
 // REQUEST LOGGING
-
 app.use((req, res, next) => {
   console.log('📨', req.method, req.url, {
     ip: req.ip,
@@ -88,8 +137,9 @@ app.use((req, res, next) => {
   next();
 });
 
+// =====================================================
 // ROOT ROUTE
-
+// =====================================================
 app.get('/', (req, res) => {
   res.json({
     success: true,
@@ -116,21 +166,12 @@ app.get('/', (req, res) => {
   });
 });
 
-// API ROUTES
-
-app.use('/api/auth', authRoutes);
-
-// CLEAN ROUTES
-
 // Health check
 app.get('/api/health', async (req, res) => {
   try {
-    // Test database connection
     await sequelize.authenticate();
-    
     res.json({ 
       status: 'OK',
-
       message: 'KovaPage API with PostgreSQL is running!',
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
@@ -183,11 +224,15 @@ process.on('SIGINT', async () => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log('KOVAPAGE is running!');
-  console.log(`Server running on port ${PORT}`);
-  console.log(` API Root: http://localhost:${PORT}/`);
-  console.log(` Health Check: http://localhost:${PORT}/api/health`);
-  console.log(`Swagger Docs: http://localhost:${PORT}/api-docs`);
-  console.log(' Database: PostgreSQL');
-  console.log('CORS is being Enabled for all origins');
+  console.log('========================================');
+  console.log('🚀 KOVAPAGE BACKEND SERVER');
+  console.log('========================================');
+  console.log(`📡 Server running on port ${PORT}`);
+  console.log(`🏠 Local: http://localhost:${PORT}/`);
+  console.log(`🔍 Health: http://localhost:${PORT}/api/health`);
+  console.log(`📚 Docs: http://localhost:${PORT}/api-docs`);
+  console.log(`💾 Database: PostgreSQL`);
+  console.log(`🌐 CORS: Enabled for all origins`);
+  console.log(`📊 Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare`);
+  console.log('========================================');
 });
