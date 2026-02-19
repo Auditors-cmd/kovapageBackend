@@ -6,10 +6,22 @@ const swaggerDocument = {
     title: 'KovaPage Backend API',
     version: '1.0.0',
     description: `
-# KovaPage - Complete Authentication API with PostgreSQL
+# KovaPage - Complete Audit Management API with PostgreSQL
 
 ## Overview
-Complete authentication system with both OTP and password-based authentication, user management, and password reset functionality using PostgreSQL database.
+Complete audit management system with 8 specialized user roles, OTP and password-based authentication, user management, and password reset functionality using PostgreSQL database.
+
+## User Roles (8 Levels)
+| Role | Level | Description |
+|------|-------|-------------|
+| **Auditee** | 1 | Business unit being audited - can respond to findings |
+| **Implementation Officer** | 2 | Implements audit recommendations |
+| **Team Member** | 3 | Works on audits, collects evidence |
+| **Team Lead** | 4 | Leads audit team, reviews work |
+| **Quality Assurance** | 5 | Ensures audit quality standards |
+| **Unit Head** | 6 | Manages audit unit/department |
+| **BAC/Secretariat** | 7 | Administrative & committee support |
+| **Chief Audit Executive** | 8 | Top leadership, final approvals |
 
 ## Authentication Methods
 - **OTP Authentication**: Email-based one-time password for registration and login
@@ -20,6 +32,7 @@ Complete authentication system with both OTP and password-based authentication, 
 - **PostgreSQL**: Relational database for user management
 - **UUID Primary Keys**: Secure user identification
 - **Data Validation**: Comprehensive input validation
+- **Role Hierarchy**: 8-level role-based access control
 
 ## Rate Limiting
 - Authentication endpoints: 10 requests per 15 minutes
@@ -44,7 +57,7 @@ Complete authentication system with both OTP and password-based authentication, 
       description: 'Development server'
     },
     {
-      url: 'https://your-render-app.onrender.com',
+      url: 'https://kovapagebackend.onrender.com',
       description: 'Production server'
     }
   ],
@@ -59,7 +72,11 @@ Complete authentication system with both OTP and password-based authentication, 
     },
     {
       name: 'User Management',
-      description: 'User profile and status endpoints'
+      description: 'User profile, roles, and management endpoints'
+    },
+    {
+      name: 'Admin',
+      description: 'Administrative endpoints for user management'
     },
     {
       name: 'Health',
@@ -93,6 +110,23 @@ Complete authentication system with both OTP and password-based authentication, 
           success: false,
           message: "An error occurred"
         }
+      },
+
+      // UPDATED: User Role Enum with all 8 roles
+      UserRole: {
+        type: 'string',
+        enum: [
+          'auditee',
+          'implementation_officer',
+          'team_member',
+          'team_lead',
+          'quality_assurance',
+          'unit_head',
+          'bac_secretariat',
+          'chief_audit_executive'
+        ],
+        description: 'User role in the audit system (8 levels)',
+        example: 'team_member'
       },
 
       // Request Schemas
@@ -259,7 +293,59 @@ Complete authentication system with both OTP and password-based authentication, 
         }
       },
 
-      // Response Schemas
+      // NEW: Admin Create User Request
+      AdminCreateUserRequest: {
+        type: 'object',
+        required: ['name', 'email', 'role'],
+        properties: {
+          name: {
+            type: 'string',
+            example: 'Jane Manager',
+            description: 'User full name'
+          },
+          email: {
+            type: 'string',
+            format: 'email',
+            example: 'jane.manager@company.com',
+            description: 'User email address'
+          },
+          password: {
+            type: 'string',
+            format: 'password',
+            example: 'password123',
+            description: 'Optional password (if not provided, OTP auth will be used)'
+          },
+          role: {
+            $ref: '#/components/schemas/UserRole'
+          },
+          department: {
+            type: 'string',
+            example: 'Internal Audit',
+            description: 'Department or unit'
+          },
+          employeeId: {
+            type: 'string',
+            example: 'EMP-2024-001',
+            description: 'Unique employee identifier'
+          },
+          reportsTo: {
+            type: 'string',
+            format: 'uuid',
+            example: '123e4567-e89b-12d3-a456-426614174000',
+            description: 'Manager/supervisor user ID'
+          }
+        },
+        example: {
+          name: 'Jane Manager',
+          email: 'jane.manager@company.com',
+          role: 'unit_head',
+          department: 'Internal Audit',
+          employeeId: 'EMP-2024-001',
+          reportsTo: '123e4567-e89b-12d3-a456-426614174000'
+        }
+      },
+
+      // UPDATED: User Response with all new fields
       UserResponse: {
         type: 'object',
         properties: {
@@ -278,13 +364,31 @@ Complete authentication system with both OTP and password-based authentication, 
             description: 'User email'
           },
           role: {
+            $ref: '#/components/schemas/UserRole'
+          },
+          department: {
             type: 'string',
-            enum: ['auditor', 'manager', 'admin'],
-            description: 'User role'
+            description: 'Department or unit',
+            example: 'Internal Audit'
+          },
+          employeeId: {
+            type: 'string',
+            description: 'Unique employee identifier',
+            example: 'EMP-2024-001'
+          },
+          reportsTo: {
+            type: 'string',
+            format: 'uuid',
+            description: 'Manager/supervisor user ID',
+            example: '123e4567-e89b-12d3-a456-426614174000'
           },
           isEmailVerified: {
             type: 'boolean',
             description: 'Email verification status'
+          },
+          isActive: {
+            type: 'boolean',
+            description: 'Account active status'
           },
           authMethod: {
             type: 'string',
@@ -309,16 +413,52 @@ Complete authentication system with both OTP and password-based authentication, 
         },
         example: {
           id: '123e4567-e89b-12d3-a456-426614174000',
-          name: 'John Auditor',
-          email: 'auditor@company.com',
-          role: 'auditor',
+          name: 'Jane Manager',
+          email: 'jane.manager@company.com',
+          role: 'unit_head',
+          department: 'Internal Audit',
+          employeeId: 'EMP-2024-001',
+          reportsTo: '123e4567-e89b-12d3-a456-426614174000',
           isEmailVerified: true,
-          authMethod: 'email_otp',
+          isActive: true,
+          authMethod: 'password',
           lastLogin: '2024-01-15T10:30:00.000Z',
           createdAt: '2024-01-15T10:00:00.000Z',
           updatedAt: '2024-01-15T10:30:00.000Z'
         }
       },
+
+      // NEW: Manager/Subordinate Response
+      ManagerResponse: {
+        type: 'object',
+        properties: {
+          id: {
+            type: 'string',
+            format: 'uuid'
+          },
+          name: {
+            type: 'string'
+          },
+          email: {
+            type: 'string',
+            format: 'email'
+          },
+          role: {
+            $ref: '#/components/schemas/UserRole'
+          },
+          department: {
+            type: 'string'
+          }
+        },
+        example: {
+          id: '123e4567-e89b-12d3-a456-426614174000',
+          name: 'John Chief',
+          email: 'john.chief@company.com',
+          role: 'chief_audit_executive',
+          department: 'Executive'
+        }
+      },
+
       AuthResponse: {
         type: 'object',
         properties: {
@@ -437,6 +577,20 @@ Complete authentication system with both OTP and password-based authentication, 
           }
         }
       },
+      Forbidden: {
+        description: 'Insufficient permissions',
+        content: {
+          'application/json': {
+            schema: {
+              $ref: '#/components/schemas/Error'
+            },
+            example: {
+              success: false,
+              message: 'Access denied. Requires team_lead role or higher.'
+            }
+          }
+        }
+      },
       ServerError: {
         description: 'Internal server error',
         content: {
@@ -544,7 +698,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/register': {
       post: {
         summary: 'Register with Password',
-        description: 'Register a new user with email and password (stored in PostgreSQL)',
+        description: 'Register a new user with email and password (default role: auditee)',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -558,7 +712,7 @@ Complete authentication system with both OTP and password-based authentication, 
         },
         responses: {
           '201': {
-            description: 'User registered successfully in PostgreSQL',
+            description: 'User registered successfully',
             content: {
               'application/json': {
                 schema: {
@@ -572,8 +726,12 @@ Complete authentication system with both OTP and password-based authentication, 
                       id: '123e4567-e89b-12d3-a456-426614174000',
                       name: 'John Auditor',
                       email: 'auditor@company.com',
-                      role: 'auditor',
+                      role: 'auditee',
+                      department: null,
+                      employeeId: null,
+                      reportsTo: null,
                       isEmailVerified: false,
+                      isActive: true,
                       authMethod: 'password',
                       lastLogin: '2024-01-15T10:30:00.000Z',
                       createdAt: '2024-01-15T10:00:00.000Z',
@@ -597,7 +755,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/login': {
       post: {
         summary: 'Login with Password',
-        description: 'Authenticate user with email and password (validated against PostgreSQL)',
+        description: 'Authenticate user with email and password',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -625,8 +783,12 @@ Complete authentication system with both OTP and password-based authentication, 
                       id: '123e4567-e89b-12d3-a456-426614174000',
                       name: 'John Auditor',
                       email: 'auditor@company.com',
-                      role: 'auditor',
+                      role: 'auditee',
+                      department: null,
+                      employeeId: null,
+                      reportsTo: null,
                       isEmailVerified: true,
+                      isActive: true,
                       authMethod: 'password',
                       lastLogin: '2024-01-15T10:30:00.000Z',
                       createdAt: '2024-01-15T10:00:00.000Z',
@@ -668,7 +830,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/email/register': {
       post: {
         summary: 'Request OTP for Registration',
-        description: 'Send OTP to email for new user registration (user stored in PostgreSQL after verification)',
+        description: 'Send OTP to email for new user registration',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -703,7 +865,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/email/verify': {
       post: {
         summary: 'Verify OTP and Register',
-        description: 'Verify OTP and create user in PostgreSQL database',
+        description: 'Verify OTP and create user (default role: auditee)',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -717,7 +879,7 @@ Complete authentication system with both OTP and password-based authentication, 
         },
         responses: {
           '200': {
-            description: 'OTP verified and user created in PostgreSQL',
+            description: 'OTP verified and user created',
             content: {
               'application/json': {
                 schema: {
@@ -731,8 +893,12 @@ Complete authentication system with both OTP and password-based authentication, 
                       id: '123e4567-e89b-12d3-a456-426614174000',
                       name: 'John Auditor',
                       email: 'auditor@company.com',
-                      role: 'auditor',
+                      role: 'auditee',
+                      department: null,
+                      employeeId: null,
+                      reportsTo: null,
                       isEmailVerified: true,
+                      isActive: true,
                       authMethod: 'email_otp',
                       lastLogin: '2024-01-15T10:30:00.000Z',
                       createdAt: '2024-01-15T10:00:00.000Z',
@@ -763,7 +929,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/email/login': {
       post: {
         summary: 'Request OTP for Login',
-        description: 'Send OTP to email for existing user login (user verified in PostgreSQL)',
+        description: 'Send OTP to email for existing user login',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -790,7 +956,7 @@ Complete authentication system with both OTP and password-based authentication, 
             $ref: '#/components/responses/BadRequest'
           },
           '404': {
-            description: 'User not found in database',
+            description: 'User not found',
             content: {
               'application/json': {
                 schema: {
@@ -808,7 +974,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/email/verify-login': {
       post: {
         summary: 'Verify OTP for Login',
-        description: 'Verify OTP and authenticate existing user from PostgreSQL',
+        description: 'Verify OTP and authenticate existing user',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -836,8 +1002,12 @@ Complete authentication system with both OTP and password-based authentication, 
                       id: '123e4567-e89b-12d3-a456-426614174000',
                       name: 'John Auditor',
                       email: 'auditor@company.com',
-                      role: 'auditor',
+                      role: 'auditee',
+                      department: null,
+                      employeeId: null,
+                      reportsTo: null,
                       isEmailVerified: true,
+                      isActive: true,
                       authMethod: 'email_otp',
                       lastLogin: '2024-01-15T10:30:00.000Z',
                       createdAt: '2024-01-15T10:00:00.000Z',
@@ -872,7 +1042,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/forgot-password': {
       post: {
         summary: 'Forgot Password',
-        description: 'Request password reset OTP for email (user verified in PostgreSQL)',
+        description: 'Request password reset OTP for email',
         tags: ['Password Reset'],
         requestBody: {
           required: true,
@@ -920,7 +1090,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/reset-password': {
       post: {
         summary: 'Reset Password',
-        description: 'Reset password using OTP and update in PostgreSQL database',
+        description: 'Reset password using OTP',
         tags: ['Password Reset'],
         requestBody: {
           required: true,
@@ -934,7 +1104,7 @@ Complete authentication system with both OTP and password-based authentication, 
         },
         responses: {
           '200': {
-            description: 'Password reset successfully in PostgreSQL',
+            description: 'Password reset successfully',
             content: {
               'application/json': {
                 schema: {
@@ -972,14 +1142,14 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/profile': {
       get: {
         summary: 'Get User Profile',
-        description: 'Get current user profile from PostgreSQL (requires authentication)',
+        description: 'Get current user profile with role and department information',
         tags: ['User Management'],
         security: [{
           bearerAuth: []
         }],
         responses: {
           '200': {
-            description: 'User profile retrieved successfully from PostgreSQL',
+            description: 'User profile retrieved successfully',
             content: {
               'application/json': {
                 schema: {
@@ -1012,7 +1182,7 @@ Complete authentication system with both OTP and password-based authentication, 
     '/api/auth/status': {
       get: {
         summary: 'Check Authentication Status',
-        description: 'Check if user is authenticated and get current user data from PostgreSQL (requires authentication)',
+        description: 'Check if user is authenticated and get current user data',
         tags: ['User Management'],
         security: [{
           bearerAuth: []
@@ -1049,6 +1219,405 @@ Complete authentication system with both OTP and password-based authentication, 
           }
         }
       }
+    },
+
+    // =======================
+    // NEW: ADMIN ENDPOINTS
+    // =======================
+    '/api/auth/admin/create-user': {
+      post: {
+        summary: 'Create User with Role (Admin Only)',
+        description: 'Create a new user with specific role. Requires BAC/Secretariat or Chief Audit Executive role.',
+        tags: ['Admin'],
+        security: [{
+          bearerAuth: []
+        }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                $ref: '#/components/schemas/AdminCreateUserRequest'
+              }
+            }
+          }
+        },
+        responses: {
+          '201': {
+            description: 'User created successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: {
+                      type: 'boolean',
+                      example: true
+                    },
+                    message: {
+                      type: 'string',
+                      example: 'User created with role: unit_head'
+                    },
+                    data: {
+                      $ref: '#/components/schemas/UserResponse'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': {
+            $ref: '#/components/responses/BadRequest'
+          },
+          '401': {
+            $ref: '#/components/responses/Unauthorized'
+          },
+          '403': {
+            $ref: '#/components/responses/Forbidden'
+          },
+          '500': {
+            $ref: '#/components/responses/ServerError'
+          }
+        }
+      }
+    },
+
+    '/api/auth/admin/users': {
+      get: {
+        summary: 'List All Users (Admin Only)',
+        description: 'Get list of all users with filtering options. Requires appropriate role.',
+        tags: ['Admin'],
+        security: [{
+          bearerAuth: []
+        }],
+        parameters: [
+          {
+            name: 'role',
+            in: 'query',
+            description: 'Filter by role',
+            schema: {
+              $ref: '#/components/schemas/UserRole'
+            }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            description: 'Filter by department',
+            schema: {
+              type: 'string'
+            }
+          },
+          {
+            name: 'isActive',
+            in: 'query',
+            description: 'Filter by active status',
+            schema: {
+              type: 'boolean'
+            }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Users retrieved successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: {
+                      type: 'boolean',
+                      example: true
+                    },
+                    data: {
+                      type: 'array',
+                      items: {
+                        $ref: '#/components/schemas/UserResponse'
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': {
+            $ref: '#/components/responses/Unauthorized'
+          },
+          '403': {
+            $ref: '#/components/responses/Forbidden'
+          },
+          '500': {
+            $ref: '#/components/responses/ServerError'
+          }
+        }
+      }
+    },
+
+    '/api/auth/admin/users/{id}': {
+      get: {
+        summary: 'Get User by ID (Admin Only)',
+        description: 'Get detailed user information including manager and subordinates',
+        tags: ['Admin'],
+        security: [{
+          bearerAuth: []
+        }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            description: 'User UUID',
+            schema: {
+              type: 'string',
+              format: 'uuid'
+            }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'User details retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: {
+                      type: 'boolean',
+                      example: true
+                    },
+                    data: {
+                      allOf: [
+                        { $ref: '#/components/schemas/UserResponse' },
+                        {
+                          type: 'object',
+                          properties: {
+                            manager: {
+                              $ref: '#/components/schemas/ManagerResponse'
+                            },
+                            subordinates: {
+                              type: 'array',
+                              items: {
+                                $ref: '#/components/schemas/ManagerResponse'
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': {
+            $ref: '#/components/responses/Unauthorized'
+          },
+          '403': {
+            $ref: '#/components/responses/Forbidden'
+          },
+          '404': {
+            $ref: '#/components/responses/NotFound'
+          },
+          '500': {
+            $ref: '#/components/responses/ServerError'
+          }
+        }
+      },
+      put: {
+        summary: 'Update User (Admin Only)',
+        description: 'Update user role, department, or manager',
+        tags: ['Admin'],
+        security: [{
+          bearerAuth: []
+        }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            description: 'User UUID',
+            schema: {
+              type: 'string',
+              format: 'uuid'
+            }
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  role: {
+                    $ref: '#/components/schemas/UserRole'
+                  },
+                  department: {
+                    type: 'string'
+                  },
+                  employeeId: {
+                    type: 'string'
+                  },
+                  reportsTo: {
+                    type: 'string',
+                    format: 'uuid'
+                  },
+                  isActive: {
+                    type: 'boolean'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'User updated successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: {
+                      type: 'boolean',
+                      example: true
+                    },
+                    message: {
+                      type: 'string',
+                      example: 'User updated successfully'
+                    },
+                    data: {
+                      $ref: '#/components/schemas/UserResponse'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': {
+            $ref: '#/components/responses/BadRequest'
+          },
+          '401': {
+            $ref: '#/components/responses/Unauthorized'
+          },
+          '403': {
+            $ref: '#/components/responses/Forbidden'
+          },
+          '404': {
+            $ref: '#/components/responses/NotFound'
+          },
+          '500': {
+            $ref: '#/components/responses/ServerError'
+          }
+        }
+      },
+      delete: {
+        summary: 'Deactivate User (Admin Only)',
+        description: 'Deactivate a user account (soft delete)',
+        tags: ['Admin'],
+        security: [{
+          bearerAuth: []
+        }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            description: 'User UUID',
+            schema: {
+              type: 'string',
+              format: 'uuid'
+            }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'User deactivated successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: {
+                      type: 'boolean',
+                      example: true
+                    },
+                    message: {
+                      type: 'string',
+                      example: 'User deactivated successfully'
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': {
+            $ref: '#/components/responses/Unauthorized'
+          },
+          '403': {
+            $ref: '#/components/responses/Forbidden'
+          },
+          '404': {
+            $ref: '#/components/responses/NotFound'
+          },
+          '500': {
+            $ref: '#/components/responses/ServerError'
+          }
+        }
+      }
+    },
+
+    '/api/auth/admin/org-chart': {
+      get: {
+        summary: 'Get Organization Chart',
+        description: 'Get hierarchical organization structure based on reportsTo relationships',
+        tags: ['Admin'],
+        security: [{
+          bearerAuth: []
+        }],
+        responses: {
+          '200': {
+            description: 'Organization chart retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: {
+                      type: 'boolean',
+                      example: true
+                    },
+                    data: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          id: { type: 'string', format: 'uuid' },
+                          name: { type: 'string' },
+                          role: { $ref: '#/components/schemas/UserRole' },
+                          department: { type: 'string' },
+                          subordinates: {
+                            type: 'array',
+                            items: { type: 'object' }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': {
+            $ref: '#/components/responses/Unauthorized'
+          },
+          '403': {
+            $ref: '#/components/responses/Forbidden'
+          },
+          '500': {
+            $ref: '#/components/responses/ServerError'
+          }
+        }
+      }
     }
   }
 };
@@ -1061,12 +1630,17 @@ const swaggerOptions = {
     .swagger-ui .btn.authorize { background-color: #2563eb; border-color: #2563eb; }
     .swagger-ui .scheme-container { background-color: #f8fafc; }
     .swagger-ui .info .description { font-size: 14px; line-height: 1.6; }
+    .swagger-ui .model-box { background-color: #f9fafb; }
+    .swagger-ui table { width: 100%; }
   `,
-  customSiteTitle: "KovaPage API Documentation (PostgreSQL)",
+  customSiteTitle: "KovaPage Audit API Documentation",
   swaggerOptions: {
     persistAuthorization: true,
     displayRequestDuration: true,
     filter: true,
+    docExpansion: 'list',
+    tagsSorter: 'alpha',
+    operationsSorter: 'alpha'
   }
 };
 

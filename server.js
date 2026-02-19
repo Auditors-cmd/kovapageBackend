@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const qaRoutes = require('./routes/qualityAssurance');
 require('dotenv').config();
 
 console.log('🔍 DATABASE_URL exists:', !!process.env.DATABASE_URL);
@@ -22,7 +23,7 @@ const initializeDatabase = async () => {
     await testConnection();
     
  
-    await sequelize.sync({ force: false }); // we shall use { force: true } only in development to drop tables
+    await sequelize.sync({ force: false}); // we shall use { force: true } only in development to drop tables
     console.log('✅ PostgreSQL tables synced successfully');
   } catch (error) {
     console.error('❌ Database initialization error:', error);
@@ -36,16 +37,17 @@ initializeDatabase();
 // SECURITY MIDDLEWARE
 app.use(helmet());
 
-// =======================
-// SIMPLE CORS CONFIGURATION (ALLOWS ALL ORIGINS)
-// =======================
+app.use('/api/qa', qaRoutes);
+
+// CORS CONFIGURATION (ALLOWS ALL ORIGINS)
+
 app.use(cors({
   origin: '*', // Allow all origins (simplest for development)
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// Optional: Log CORS requests for debugging
+// Optional,althoughb this will help log CORS requests for debugging, just incase...
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
