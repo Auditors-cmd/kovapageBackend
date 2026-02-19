@@ -81,7 +81,7 @@ router.post('/register', upload.single('profilePhoto'), async (req, res) => {
       });
     }
 
-    if (password.length < 6) {
+    if (password.length < 8) {
       if (profilePhoto) fs.unlinkSync(profilePhoto.path);
       return res.status(400).json({
         success: false,
