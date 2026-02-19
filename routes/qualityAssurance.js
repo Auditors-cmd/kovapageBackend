@@ -4,6 +4,7 @@ const { hasRoleLevel } = require('../middleware/roles');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const { Op } = require('sequelize'); // Add this import
 const RiskAssessment = require('../models/RiskAssessment');
 const AuditPlan = require('../models/AuditPlan');
 const MonitoringDashboard = require('../models/MonitoringDashboard');
@@ -394,6 +395,241 @@ router.get('/dashboard', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching dashboard data'
+    });
+  }
+});
+
+// =======================
+// ENHANCED DASHBOARD WITH CHARTS (NEW)
+// =======================
+
+// @desc    Get enhanced QA dashboard data with charts and metrics
+// @route   GET /api/qa/dashboard-data
+// @access  Quality Assurance and above
+router.get('/dashboard-data', async (req, res) => {
+  try {
+    const currentYear = new Date().getFullYear();
+    const priorYear = currentYear - 1;
+
+    // =====================================================
+    // 1. Get audit performance data (Prior Year vs Current Year)
+    // =====================================================
+    
+    // Get current year audits by quarter
+    const currentYearAudits = await AuditPlan.findAll({
+      where: sequelize.where(
+        sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+        currentYear
+      ),
+      attributes: [
+        [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"')), 'quarter'],
+        [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+      ],
+      group: [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"'))],
+      raw: true
+    });
+
+    // Get prior year audits by quarter
+    const priorYearAudits = await AuditPlan.findAll({
+      where: sequelize.where(
+        sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+        priorYear
+      ),
+      attributes: [
+        [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"')), 'quarter'],
+        [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+      ],
+      group: [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"'))],
+      raw: true
+    });
+
+    // Format audit performance data for charts
+    const auditPerformance = {
+      currentYear: {
+        year: currentYear,
+        quarters: { Q1: 0, Q2: 0, Q3: 0, Q4: 0 }
+      },
+      priorYear: {
+        year: priorYear,
+        quarters: { Q1: 0, Q2: 0, Q3: 0, Q4: 0 }
+      }
+    };
+
+    // Populate current year data
+    currentYearAudits.forEach(item => {
+      const quarterNum = Math.floor(parseFloat(item.quarter));
+      const quarterKey = `Q${quarterNum}`;
+      auditPerformance.currentYear.quarters[quarterKey] = parseInt(item.count) || 0;
+    });
+
+    // Populate prior year data
+    priorYearAudits.forEach(item => {
+      const quarterNum = Math.floor(parseFloat(item.quarter));
+      const quarterKey = `Q${quarterNum}`;
+      auditPerformance.priorYear.quarters[quarterKey] = parseInt(item.count) || 0;
+    });
+
+    // =====================================================
+    // 2. Calculate quarterly variance trend
+    // =====================================================
+    
+    const quarterlyVariance = {
+      quarters: ['Q1', 'Q2', 'Q3', 'Q4'],
+      variance: [],
+      percentChange: []
+    };
+
+    // Calculate variance (Current Year - Prior Year) for each quarter
+    ['Q1', 'Q2', 'Q3', 'Q4'].forEach(quarter => {
+      const current = auditPerformance.currentYear.quarters[quarter];
+      const prior = auditPerformance.priorYear.quarters[quarter];
+      const variance = current - prior;
+      quarterlyVariance.variance.push(variance);
+      
+      // Calculate percentage change (avoid division by zero)
+      const percentChange = prior === 0 ? (variance * 100) : Math.round((variance / prior) * 100);
+      quarterlyVariance.percentChange.push(percentChange);
+    });
+
+    // =====================================================
+    // 3. Get metrics for available actions
+    // =====================================================
+    
+    // Count pending plans to review
+    const pendingPlansCount = await AuditPlan.count({
+      where: { status: 'under_review' }
+    });
+
+    // Count plans ready for consolidation
+    const readyForConsolidation = await AuditPlan.count({
+      where: { status: 'approved' }
+    });
+
+    // Count pending approvals
+    const pendingApprovals = await AuditPlan.count({
+      where: { status: 'pending_approval' }
+    });
+
+    // Count reports ready for review
+    const reportsToReview = await AuditPlan.count({
+      where: { status: 'ready_for_review' }
+    });
+
+    // Get audit history summary
+    const auditHistory = await AuditPlan.findAll({
+      attributes: [
+        'status',
+        [sequelize.fn('COUNT', sequelize.col('status')), 'count']
+      ],
+      group: ['status']
+    });
+
+    // Format history data
+    const historySummary = {};
+    let totalAudits = 0;
+    auditHistory.forEach(item => {
+      const count = parseInt(item.dataValues.count);
+      historySummary[item.status] = count;
+      totalAudits += count;
+    });
+
+    // Get recent risk assessments count (last 30 days)
+    const recentRiskAssessments = await RiskAssessment.count({
+      where: {
+        createdAt: {
+          [Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days
+        }
+      }
+    });
+
+    // =====================================================
+    // 4. Compile complete dashboard data
+    // =====================================================
+    
+    const dashboardData = {
+      // Chart data for frontend
+      charts: {
+        auditPerformance: {
+          title: 'Audit Performance Comparison',
+          description: 'Prior Year vs Current Year by Quarter',
+          data: auditPerformance,
+          chartType: 'bar'
+        },
+        quarterlyVariance: {
+          title: 'Quarterly Variance Trend',
+          description: 'Change in audit performance',
+          data: quarterlyVariance,
+          chartType: 'line'
+        }
+      },
+      
+      // Available actions with counts
+      actions: {
+        uploadRiskData: {
+          name: 'Upload Risk Data',
+          description: 'Upload operational risk template',
+          icon: 'upload',
+          count: recentRiskAssessments,
+          route: '/api/qa/upload-risk-data'
+        },
+        monitoringDashboard: {
+          name: 'Monitoring Dashboard',
+          description: 'Track status & generate reports',
+          icon: 'dashboard',
+          route: '/api/qa/dashboard'
+        },
+        consolidatePlans: {
+          name: 'Consolidate Plans',
+          description: `${pendingPlansCount} unit plan${pendingPlansCount !== 1 ? 's' : ''} to review`,
+          icon: 'merge',
+          count: pendingPlansCount,
+          route: '/api/qa/consolidate-plans'
+        }
+      },
+      
+      // Metrics cards
+      metrics: {
+        pendingApprovals: {
+          label: 'APM Approvals',
+          count: pendingApprovals,
+          icon: 'approval'
+        },
+        reportsToReview: {
+          label: 'Report Review',
+          count: reportsToReview,
+          icon: 'report'
+        },
+        readyForConsolidation: {
+          label: 'Ready for Consolidation',
+          count: readyForConsolidation,
+          icon: 'consolidate'
+        },
+        auditHistory: {
+          label: 'Audit History',
+          total: totalAudits,
+          byStatus: historySummary,
+          icon: 'history'
+        }
+      },
+      
+      // Summary stats
+      summary: {
+        totalAudits,
+        pendingReviews: pendingPlansCount,
+        completedThisYear: Object.values(auditPerformance.currentYear.quarters).reduce((a, b) => a + b, 0)
+      }
+    };
+
+    res.json({
+      success: true,
+      data: dashboardData
+    });
+
+  } catch (error) {
+    console.error('Enhanced dashboard data error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching enhanced dashboard data'
     });
   }
 });

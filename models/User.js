@@ -88,6 +88,31 @@ const User = sequelize.define('User', {
     },
     comment: 'Manager/supervisor user ID'
   },
+
+  roleSelectedAt: {
+  type: DataTypes.DATE,
+  allowNull: true,
+  comment: 'When user selected their role'
+},
+
+profilePhoto: {
+  type: DataTypes.STRING,
+  allowNull: true,
+  comment: 'URL or path to profile photo'
+},
+
+profilePhotoUrl: {
+  type: DataTypes.STRING,
+  allowNull: true,
+  comment: 'Full URL to access profile photo'
+},
+
+profilePhotoPublicId: {
+  type: DataTypes.STRING,
+  allowNull: true,
+  comment: 'For cloud storage reference (Cloudinary, etc.)'
+},
+
   // NEW: Custom permissions override
   permissions: {
     type: DataTypes.JSONB,

@@ -75,6 +75,18 @@ Complete audit management system with 8 specialized user roles, OTP and password
       description: 'User profile, roles, and management endpoints'
     },
     {
+      name: 'Role Management',
+      description: 'Role selection and management endpoints'
+    },
+    {
+      name: 'Profile',
+      description: 'Profile photo and personal information management'
+    },
+    {
+      name: 'Quality Assurance',
+      description: 'QA dashboard, risk assessment, and audit plan consolidation'
+    },
+    {
       name: 'Admin',
       description: 'Administrative endpoints for user management'
     },
@@ -112,7 +124,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
         }
       },
 
-      // UPDATED: User Role Enum with all 8 roles
+      // User Role Enum with all 8 roles
       UserRole: {
         type: 'string',
         enum: [
@@ -126,10 +138,72 @@ Complete audit management system with 8 specialized user roles, OTP and password
           'chief_audit_executive'
         ],
         description: 'User role in the audit system (8 levels)',
-        example: 'team_member'
+        example: 'quality_assurance'
       },
 
       // Request Schemas
+      RegisterWithPhotoRequest: {
+        type: 'object',
+        required: ['name', 'email', 'password'],
+        properties: {
+          name: {
+            type: 'string',
+            example: 'John Doe',
+            description: 'User full name'
+          },
+          email: {
+            type: 'string',
+            format: 'email',
+            example: 'john.doe@company.com',
+            description: 'User email address'
+          },
+          password: {
+            type: 'string',
+            format: 'password',
+            example: 'password123',
+            description: 'User password (min 6 characters)'
+          },
+          profilePhoto: {
+            type: 'string',
+            format: 'binary',
+            description: 'Profile photo image file (jpeg, png, gif, webp) - max 5MB'
+          }
+        }
+      },
+
+      UpdateRoleRequest: {
+        type: 'object',
+        required: ['role'],
+        properties: {
+          role: {
+            $ref: '#/components/schemas/UserRole'
+          }
+        },
+        example: {
+          role: 'quality_assurance'
+        }
+      },
+
+      RoleStatusResponse: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean', example: true },
+          data: {
+            type: 'object',
+            properties: {
+              currentRole: { $ref: '#/components/schemas/UserRole' },
+              needsSelection: { type: 'boolean', example: true },
+              roleSelectedAt: { type: 'string', format: 'date-time', nullable: true },
+              availableRoles: {
+                type: 'array',
+                items: { $ref: '#/components/schemas/UserRole' }
+              },
+              dashboard: { type: 'string', example: '/qa/dashboard' }
+            }
+          }
+        }
+      },
+
       OTPRegisterRequest: {
         type: 'object',
         required: ['email', 'name'],
@@ -144,13 +218,15 @@ Complete audit management system with 8 specialized user roles, OTP and password
             type: 'string',
             example: 'John Auditor',
             description: 'User full name (2-50 characters)'
+          },
+          profilePhoto: {
+            type: 'string',
+            format: 'binary',
+            description: 'Profile photo image file (optional)'
           }
-        },
-        example: {
-          email: 'auditor@company.com',
-          name: 'John Auditor'
         }
       },
+      
       OTPVerifyRequest: {
         type: 'object',
         required: ['email', 'name', 'otp'],
@@ -176,6 +252,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           otp: '123456'
         }
       },
+      
       OTPLoginRequest: {
         type: 'object',
         required: ['email'],
@@ -187,6 +264,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           }
         }
       },
+      
       OTPVerifyLoginRequest: {
         type: 'object',
         required: ['email', 'otp'],
@@ -203,6 +281,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           }
         }
       },
+      
       PasswordRegisterRequest: {
         type: 'object',
         required: ['name', 'email', 'password'],
@@ -231,6 +310,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           password: 'password123'
         }
       },
+      
       PasswordLoginRequest: {
         type: 'object',
         required: ['email', 'password'],
@@ -251,6 +331,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           password: 'password123'
         }
       },
+      
       ForgotPasswordRequest: {
         type: 'object',
         required: ['email'],
@@ -265,6 +346,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           email: 'auditor@company.com'
         }
       },
+      
       ResetPasswordRequest: {
         type: 'object',
         required: ['email', 'otp', 'newPassword'],
@@ -293,7 +375,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
         }
       },
 
-      // NEW: Admin Create User Request
+      // Admin Create User Request
       AdminCreateUserRequest: {
         type: 'object',
         required: ['name', 'email', 'role'],
@@ -345,7 +427,185 @@ Complete audit management system with 8 specialized user roles, OTP and password
         }
       },
 
-      // UPDATED: User Response with all new fields
+      // QA Dashboard Schemas
+      RiskAssessmentUploadRequest: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', example: 'Q1 Risk Assessment' },
+          description: { type: 'string', example: 'Operational risk assessment for Q1' },
+          department: { type: 'string', example: 'Finance' },
+          assessmentDate: { type: 'string', format: 'date', example: '2024-01-15' },
+          riskFile: {
+            type: 'string',
+            format: 'binary',
+            description: 'Risk data file (Excel, JSON, or CSV)'
+          }
+        }
+      },
+
+      AuditPerformanceData: {
+        type: 'object',
+        properties: {
+          currentYear: {
+            type: 'object',
+            properties: {
+              year: { type: 'integer', example: 2026 },
+              quarters: {
+                type: 'object',
+                properties: {
+                  Q1: { type: 'integer', example: 12 },
+                  Q2: { type: 'integer', example: 15 },
+                  Q3: { type: 'integer', example: 8 },
+                  Q4: { type: 'integer', example: 10 }
+                }
+              }
+            }
+          },
+          priorYear: {
+            type: 'object',
+            properties: {
+              year: { type: 'integer', example: 2025 },
+              quarters: {
+                type: 'object',
+                properties: {
+                  Q1: { type: 'integer', example: 16 },
+                  Q2: { type: 'integer', example: 15 },
+                  Q3: { type: 'integer', example: 6 },
+                  Q4: { type: 'integer', example: 6 }
+                }
+              }
+            }
+          }
+        }
+      },
+
+      QuarterlyVarianceData: {
+        type: 'object',
+        properties: {
+          quarters: {
+            type: 'array',
+            items: { type: 'string', example: 'Q1' }
+          },
+          variance: {
+            type: 'array',
+            items: { type: 'integer', example: -4 }
+          },
+          percentChange: {
+            type: 'array',
+            items: { type: 'integer', example: -25 }
+          }
+        }
+      },
+
+      QADashboardDataResponse: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean', example: true },
+          data: {
+            type: 'object',
+            properties: {
+              charts: {
+                type: 'object',
+                properties: {
+                  auditPerformance: {
+                    type: 'object',
+                    properties: {
+                      title: { type: 'string' },
+                      description: { type: 'string' },
+                      data: { $ref: '#/components/schemas/AuditPerformanceData' },
+                      chartType: { type: 'string', example: 'bar' }
+                    }
+                  },
+                  quarterlyVariance: {
+                    type: 'object',
+                    properties: {
+                      title: { type: 'string' },
+                      description: { type: 'string' },
+                      data: { $ref: '#/components/schemas/QuarterlyVarianceData' },
+                      chartType: { type: 'string', example: 'line' }
+                    }
+                  }
+                }
+              },
+              actions: {
+                type: 'object',
+                properties: {
+                  uploadRiskData: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' },
+                      description: { type: 'string' },
+                      count: { type: 'integer' },
+                      route: { type: 'string' }
+                    }
+                  },
+                  monitoringDashboard: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' },
+                      description: { type: 'string' },
+                      route: { type: 'string' }
+                    }
+                  },
+                  consolidatePlans: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' },
+                      description: { type: 'string' },
+                      count: { type: 'integer' },
+                      route: { type: 'string' }
+                    }
+                  }
+                }
+              },
+              metrics: {
+                type: 'object',
+                properties: {
+                  pendingApprovals: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string' },
+                      count: { type: 'integer' }
+                    }
+                  },
+                  reportsToReview: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string' },
+                      count: { type: 'integer' }
+                    }
+                  },
+                  readyForConsolidation: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string' },
+                      count: { type: 'integer' }
+                    }
+                  },
+                  auditHistory: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string' },
+                      total: { type: 'integer' },
+                      byStatus: { type: 'object' }
+                    }
+                  }
+                }
+              },
+              summary: {
+                type: 'object',
+                properties: {
+                  totalAudits: { type: 'integer' },
+                  pendingReviews: { type: 'integer' },
+                  completedThisYear: { type: 'integer' }
+                }
+              }
+            }
+          }
+        }
+      },
+
+      // User Response with all fields
       UserResponse: {
         type: 'object',
         properties: {
@@ -365,6 +625,15 @@ Complete audit management system with 8 specialized user roles, OTP and password
           },
           role: {
             $ref: '#/components/schemas/UserRole'
+          },
+          profilePhoto: {
+            type: 'string',
+            description: 'Profile photo filename'
+          },
+          profilePhotoUrl: {
+            type: 'string',
+            description: 'Full URL to profile photo',
+            example: 'https://kovapagebackend.onrender.com/uploads/profiles/profile-123456.jpg'
           },
           department: {
             type: 'string',
@@ -400,6 +669,15 @@ Complete audit management system with 8 specialized user roles, OTP and password
             format: 'date-time',
             description: 'Last login timestamp'
           },
+          needsRoleSelection: {
+            type: 'boolean',
+            description: 'Whether user needs to select a role'
+          },
+          dashboard: {
+            type: 'string',
+            description: 'URL to user\'s role-specific dashboard',
+            example: '/qa/dashboard'
+          },
           createdAt: {
             type: 'string',
             format: 'date-time',
@@ -415,7 +693,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
           id: '123e4567-e89b-12d3-a456-426614174000',
           name: 'Jane Manager',
           email: 'jane.manager@company.com',
-          role: 'unit_head',
+          role: 'quality_assurance',
+          profilePhoto: 'profile-123456.jpg',
+          profilePhotoUrl: 'https://kovapagebackend.onrender.com/uploads/profiles/profile-123456.jpg',
           department: 'Internal Audit',
           employeeId: 'EMP-2024-001',
           reportsTo: '123e4567-e89b-12d3-a456-426614174000',
@@ -423,12 +703,14 @@ Complete audit management system with 8 specialized user roles, OTP and password
           isActive: true,
           authMethod: 'password',
           lastLogin: '2024-01-15T10:30:00.000Z',
+          needsRoleSelection: false,
+          dashboard: '/qa/dashboard',
           createdAt: '2024-01-15T10:00:00.000Z',
           updatedAt: '2024-01-15T10:30:00.000Z'
         }
       },
 
-      // NEW: Manager/Subordinate Response
+      // Manager/Subordinate Response
       ManagerResponse: {
         type: 'object',
         properties: {
@@ -483,6 +765,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           }
         }
       },
+      
       OTPResponse: {
         type: 'object',
         properties: {
@@ -501,6 +784,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
               },
               name: {
                 type: 'string'
+              },
+              hasProfilePhoto: {
+                type: 'boolean'
               }
             }
           }
@@ -510,10 +796,12 @@ Complete audit management system with 8 specialized user roles, OTP and password
           message: 'Verification code sent to auditor@company.com',
           data: {
             email: 'auditor@company.com',
-            name: 'John Auditor'
+            name: 'John Auditor',
+            hasProfilePhoto: true
           }
         }
       },
+      
       HealthResponse: {
         type: 'object',
         properties: {
@@ -697,15 +985,15 @@ Complete audit management system with 8 specialized user roles, OTP and password
     // =======================
     '/api/auth/register': {
       post: {
-        summary: 'Register with Password',
-        description: 'Register a new user with email and password (default role: auditee)',
+        summary: 'Register with Password and Profile Photo',
+        description: 'Register a new user with email, password, and optional profile photo',
         tags: ['Authentication'],
         requestBody: {
           required: true,
           content: {
-            'application/json': {
+            'multipart/form-data': {
               schema: {
-                $ref: '#/components/schemas/PasswordRegisterRequest'
+                $ref: '#/components/schemas/RegisterWithPhotoRequest'
               }
             }
           }
@@ -720,22 +1008,19 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 },
                 example: {
                   success: true,
-                  message: 'User registered successfully! Welcome to KovaPage!',
+                  message: 'User registered successfully! Please complete your profile.',
                   data: {
                     user: {
                       id: '123e4567-e89b-12d3-a456-426614174000',
-                      name: 'John Auditor',
-                      email: 'auditor@company.com',
+                      name: 'John Doe',
+                      email: 'john@company.com',
                       role: 'auditee',
-                      department: null,
-                      employeeId: null,
-                      reportsTo: null,
+                      profilePhoto: 'profile-123456.jpg',
+                      profilePhotoUrl: 'https://kovapagebackend.onrender.com/uploads/profiles/profile-123456.jpg',
                       isEmailVerified: false,
-                      isActive: true,
                       authMethod: 'password',
                       lastLogin: '2024-01-15T10:30:00.000Z',
-                      createdAt: '2024-01-15T10:00:00.000Z',
-                      updatedAt: '2024-01-15T10:30:00.000Z'
+                      needsRoleSelection: true
                     },
                     token: 'jwt_token_123456'
                   }
@@ -777,22 +1062,16 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 },
                 example: {
                   success: true,
-                  message: 'Welcome back, John Auditor!',
+                  message: 'Welcome back, John!',
                   data: {
                     user: {
                       id: '123e4567-e89b-12d3-a456-426614174000',
-                      name: 'John Auditor',
-                      email: 'auditor@company.com',
-                      role: 'auditee',
-                      department: null,
-                      employeeId: null,
-                      reportsTo: null,
-                      isEmailVerified: true,
-                      isActive: true,
-                      authMethod: 'password',
-                      lastLogin: '2024-01-15T10:30:00.000Z',
-                      createdAt: '2024-01-15T10:00:00.000Z',
-                      updatedAt: '2024-01-15T10:30:00.000Z'
+                      name: 'John Doe',
+                      email: 'john@company.com',
+                      role: 'quality_assurance',
+                      profilePhotoUrl: 'https://kovapagebackend.onrender.com/uploads/profiles/profile-123456.jpg',
+                      dashboard: '/qa/dashboard',
+                      needsRoleSelection: false
                     },
                     token: 'jwt_token_123456'
                   }
@@ -806,20 +1085,143 @@ Complete audit management system with 8 specialized user roles, OTP and password
               'application/json': {
                 schema: {
                   $ref: '#/components/schemas/Error'
-                },
-                example: {
-                  success: false,
-                  message: 'Invalid credentials'
                 }
               }
             }
           },
-          '400': {
-            $ref: '#/components/responses/BadRequest'
-          },
           '500': {
             $ref: '#/components/responses/ServerError'
           }
+        }
+      }
+    },
+
+    // =======================
+    // ROLE MANAGEMENT
+    // =======================
+    '/api/auth/update-role': {
+      put: {
+        summary: 'Update User Role',
+        description: 'Update user role after registration',
+        tags: ['Role Management'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                $ref: '#/components/schemas/UpdateRoleRequest'
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Role updated successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        name: { type: 'string' },
+                        email: { type: 'string' },
+                        role: { $ref: '#/components/schemas/UserRole' },
+                        dashboard: { type: 'string' },
+                        welcomeMessage: { type: 'string' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/auth/role-status': {
+      get: {
+        summary: 'Check Role Status',
+        description: 'Check if user needs to select a role',
+        tags: ['Role Management'],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Role status retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/RoleStatusResponse'
+                }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    // =======================
+    // PROFILE MANAGEMENT
+    // =======================
+    '/api/auth/update-photo': {
+      put: {
+        summary: 'Update Profile Photo',
+        description: 'Update user profile photo',
+        tags: ['Profile'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                type: 'object',
+                properties: {
+                  profilePhoto: {
+                    type: 'string',
+                    format: 'binary',
+                    description: 'Profile photo image file (jpeg, png, gif, webp) - max 5MB'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Profile photo updated',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        profilePhoto: { type: 'string' },
+                        profilePhotoUrl: { type: 'string' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
@@ -835,7 +1237,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
         requestBody: {
           required: true,
           content: {
-            'application/json': {
+            'multipart/form-data': {
               schema: {
                 $ref: '#/components/schemas/OTPRegisterRequest'
               }
@@ -853,19 +1255,16 @@ Complete audit management system with 8 specialized user roles, OTP and password
               }
             }
           },
-          '400': {
-            $ref: '#/components/responses/BadRequest'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
+
     '/api/auth/email/verify': {
       post: {
         summary: 'Verify OTP and Register',
-        description: 'Verify OTP and create user (default role: auditee)',
+        description: 'Verify OTP and create user',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -878,34 +1277,12 @@ Complete audit management system with 8 specialized user roles, OTP and password
           }
         },
         responses: {
-          '200': {
+          '201': {
             description: 'OTP verified and user created',
             content: {
               'application/json': {
                 schema: {
                   $ref: '#/components/schemas/AuthResponse'
-                },
-                example: {
-                  success: true,
-                  message: 'Registration successful! Welcome to KovaPage!',
-                  data: {
-                    user: {
-                      id: '123e4567-e89b-12d3-a456-426614174000',
-                      name: 'John Auditor',
-                      email: 'auditor@company.com',
-                      role: 'auditee',
-                      department: null,
-                      employeeId: null,
-                      reportsTo: null,
-                      isEmailVerified: true,
-                      isActive: true,
-                      authMethod: 'email_otp',
-                      lastLogin: '2024-01-15T10:30:00.000Z',
-                      createdAt: '2024-01-15T10:00:00.000Z',
-                      updatedAt: '2024-01-15T10:30:00.000Z'
-                    },
-                    token: 'jwt_token_123456'
-                  }
                 }
               }
             }
@@ -920,12 +1297,11 @@ Complete audit management system with 8 specialized user roles, OTP and password
               }
             }
           },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
+
     '/api/auth/email/login': {
       post: {
         summary: 'Request OTP for Login',
@@ -952,25 +1328,12 @@ Complete audit management system with 8 specialized user roles, OTP and password
               }
             }
           },
-          '400': {
-            $ref: '#/components/responses/BadRequest'
-          },
-          '404': {
-            description: 'User not found',
-            content: {
-              'application/json': {
-                schema: {
-                  $ref: '#/components/schemas/Error'
-                }
-              }
-            }
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '404': { description: 'User not found' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
+
     '/api/auth/email/verify-login': {
       post: {
         summary: 'Verify OTP for Login',
@@ -993,45 +1356,12 @@ Complete audit management system with 8 specialized user roles, OTP and password
               'application/json': {
                 schema: {
                   $ref: '#/components/schemas/AuthResponse'
-                },
-                example: {
-                  success: true,
-                  message: 'Welcome back, John Auditor!',
-                  data: {
-                    user: {
-                      id: '123e4567-e89b-12d3-a456-426614174000',
-                      name: 'John Auditor',
-                      email: 'auditor@company.com',
-                      role: 'auditee',
-                      department: null,
-                      employeeId: null,
-                      reportsTo: null,
-                      isEmailVerified: true,
-                      isActive: true,
-                      authMethod: 'email_otp',
-                      lastLogin: '2024-01-15T10:30:00.000Z',
-                      createdAt: '2024-01-15T10:00:00.000Z',
-                      updatedAt: '2024-01-15T10:30:00.000Z'
-                    },
-                    token: 'jwt_token_123456'
-                  }
                 }
               }
             }
           },
-          '400': {
-            description: 'Invalid OTP or expired code',
-            content: {
-              'application/json': {
-                schema: {
-                  $ref: '#/components/schemas/Error'
-                }
-              }
-            }
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '400': { description: 'Invalid OTP or expired code' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
@@ -1042,7 +1372,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/forgot-password': {
       post: {
         summary: 'Forgot Password',
-        description: 'Request password reset OTP for email',
+        description: 'Request password reset OTP',
         tags: ['Password Reset'],
         requestBody: {
           required: true,
@@ -1056,37 +1386,25 @@ Complete audit management system with 8 specialized user roles, OTP and password
         },
         responses: {
           '200': {
-            description: 'Reset OTP sent successfully',
+            description: 'Reset OTP sent',
             content: {
               'application/json': {
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
-                    message: {
-                      type: 'string'
-                    }
-                  },
-                  example: {
-                    success: true,
-                    message: 'Password reset code sent to your email'
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' }
                   }
                 }
               }
             }
           },
-          '400': {
-            $ref: '#/components/responses/BadRequest'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
+
     '/api/auth/reset-password': {
       post: {
         summary: 'Reset Password',
@@ -1110,28 +1428,15 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
-                    message: {
-                      type: 'string'
-                    }
-                  },
-                  example: {
-                    success: true,
-                    message: 'Password reset successfully! You can now login with your new password.'
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' }
                   }
                 }
               }
             }
           },
-          '400': {
-            $ref: '#/components/responses/BadRequest'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
@@ -1142,96 +1447,271 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/profile': {
       get: {
         summary: 'Get User Profile',
-        description: 'Get current user profile with role and department information',
+        description: 'Get current user profile',
         tags: ['User Management'],
-        security: [{
-          bearerAuth: []
-        }],
+        security: [{ bearerAuth: [] }],
         responses: {
           '200': {
-            description: 'User profile retrieved successfully',
+            description: 'Profile retrieved',
             content: {
               'application/json': {
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
-                    data: {
-                      $ref: '#/components/schemas/UserResponse'
-                    }
+                    success: { type: 'boolean', example: true },
+                    data: { $ref: '#/components/schemas/UserResponse' }
                   }
                 }
               }
             }
           },
-          '401': {
-            $ref: '#/components/responses/Unauthorized'
-          },
-          '404': {
-            $ref: '#/components/responses/NotFound'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
+
     '/api/auth/status': {
       get: {
         summary: 'Check Authentication Status',
-        description: 'Check if user is authenticated and get current user data',
+        description: 'Check if user is authenticated',
         tags: ['User Management'],
-        security: [{
-          bearerAuth: []
-        }],
+        security: [{ bearerAuth: [] }],
         responses: {
           '200': {
-            description: 'Authentication status retrieved',
+            description: 'Status retrieved',
             content: {
               'application/json': {
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
-                    isAuthenticated: {
-                      type: 'boolean',
-                      example: true
-                    },
-                    data: {
-                      $ref: '#/components/schemas/UserResponse'
-                    }
+                    success: { type: 'boolean', example: true },
+                    isAuthenticated: { type: 'boolean', example: true },
+                    data: { $ref: '#/components/schemas/UserResponse' }
                   }
                 }
               }
             }
           },
-          '401': {
-            $ref: '#/components/responses/Unauthorized'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
 
     // =======================
-    // NEW: ADMIN ENDPOINTS
+    // QUALITY ASSURANCE ENDPOINTS
+    // =======================
+    '/api/qa/upload-risk-data': {
+      post: {
+        summary: 'Upload Risk Data',
+        description: 'Upload operational risk data file (QA role required)',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                $ref: '#/components/schemas/RiskAssessmentUploadRequest'
+              }
+            }
+          }
+        },
+        responses: {
+          '201': {
+            description: 'Risk data uploaded successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' },
+                    data: { type: 'object' }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/dashboard': {
+      get: {
+        summary: 'Get QA Dashboard',
+        description: 'Get basic QA dashboard metrics',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Dashboard data retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    data: { type: 'object' }
+                  }
+                }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/dashboard-data': {
+      get: {
+        summary: 'Get Enhanced QA Dashboard',
+        description: 'Get enhanced QA dashboard with charts and detailed metrics',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Enhanced dashboard data retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/QADashboardDataResponse'
+                }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/risk-assessments': {
+      get: {
+        summary: 'Get Risk Assessments',
+        description: 'Get all risk assessments with status counts',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            description: 'Filter by status',
+            schema: { type: 'string', enum: ['pending', 'in_progress', 'completed'] }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            description: 'Filter by department',
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': { description: 'Risk assessments retrieved' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/audit-plans': {
+      get: {
+        summary: 'Get Audit Plans',
+        description: 'Get audit plans for consolidation',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': { description: 'Audit plans retrieved' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/consolidate-plans': {
+      post: {
+        summary: 'Consolidate Audit Plans',
+        description: 'Consolidate multiple audit plans into one',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['planIds'],
+                properties: {
+                  planIds: {
+                    type: 'array',
+                    items: { type: 'string', format: 'uuid' },
+                    description: 'Array of plan IDs to consolidate (minimum 2)'
+                  },
+                  consolidatedTitle: {
+                    type: 'string',
+                    description: 'Title for the consolidated plan'
+                  },
+                  description: {
+                    type: 'string',
+                    description: 'Description for the consolidated plan'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '201': { description: 'Plans consolidated successfully' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/download-template': {
+      get: {
+        summary: 'Download Risk Template',
+        description: 'Download risk data template',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Template downloaded',
+            content: {
+              'application/json': {
+                schema: { type: 'object' }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    // =======================
+    // ADMIN ENDPOINTS
     // =======================
     '/api/auth/admin/create-user': {
       post: {
         summary: 'Create User with Role (Admin Only)',
-        description: 'Create a new user with specific role. Requires BAC/Secretariat or Chief Audit Executive role.',
+        description: 'Create a new user with specific role. Requires BAC/Secretariat or higher.',
         tags: ['Admin'],
-        security: [{
-          bearerAuth: []
-        }],
+        security: [{ bearerAuth: [] }],
         requestBody: {
           required: true,
           content: {
@@ -1250,34 +1730,18 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
-                    message: {
-                      type: 'string',
-                      example: 'User created with role: unit_head'
-                    },
-                    data: {
-                      $ref: '#/components/schemas/UserResponse'
-                    }
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' },
+                    data: { $ref: '#/components/schemas/UserResponse' }
                   }
                 }
               }
             }
           },
-          '400': {
-            $ref: '#/components/responses/BadRequest'
-          },
-          '401': {
-            $ref: '#/components/responses/Unauthorized'
-          },
-          '403': {
-            $ref: '#/components/responses/Forbidden'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
@@ -1285,91 +1749,162 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/admin/users': {
       get: {
         summary: 'List All Users (Admin Only)',
-        description: 'Get list of all users with filtering options. Requires appropriate role.',
+        description: 'Get list of all users with filtering options',
         tags: ['Admin'],
-        security: [{
-          bearerAuth: []
-        }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           {
             name: 'role',
             in: 'query',
             description: 'Filter by role',
-            schema: {
-              $ref: '#/components/schemas/UserRole'
-            }
+            schema: { $ref: '#/components/schemas/UserRole' }
           },
           {
             name: 'department',
             in: 'query',
             description: 'Filter by department',
-            schema: {
-              type: 'string'
-            }
+            schema: { type: 'string' }
           },
           {
             name: 'isActive',
             in: 'query',
             description: 'Filter by active status',
-            schema: {
-              type: 'boolean'
-            }
+            schema: { type: 'boolean' }
+          },
+          {
+            name: 'search',
+            in: 'query',
+            description: 'Search by name, email, or employee ID',
+            schema: { type: 'string' }
           }
         ],
         responses: {
           '200': {
-            description: 'Users retrieved successfully',
+            description: 'Users retrieved',
             content: {
               'application/json': {
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
+                    success: { type: 'boolean', example: true },
+                    count: { type: 'integer' },
                     data: {
                       type: 'array',
-                      items: {
-                        $ref: '#/components/schemas/UserResponse'
-                      }
+                      items: { $ref: '#/components/schemas/UserResponse' }
                     }
                   }
                 }
               }
             }
           },
-          '401': {
-            $ref: '#/components/responses/Unauthorized'
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/auth/admin/pending-users': {
+      get: {
+        summary: 'Get Pending Users (Admin Only)',
+        description: 'Get users waiting for role assignment',
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Pending users retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    count: { type: 'integer' },
+                    data: {
+                      type: 'array',
+                      items: { $ref: '#/components/schemas/UserResponse' }
+                    }
+                  }
+                }
+              }
+            }
           },
-          '403': {
-            $ref: '#/components/responses/Forbidden'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/auth/admin/assign-role/{userId}': {
+      put: {
+        summary: 'Assign Role to User (Admin Only)',
+        description: 'Assign role to a user',
+        tags: ['Admin'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'userId',
+            in: 'path',
+            required: true,
+            description: 'User UUID',
+            schema: { type: 'string', format: 'uuid' }
           }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['role'],
+                properties: {
+                  role: { $ref: '#/components/schemas/UserRole' },
+                  department: { type: 'string' },
+                  employeeId: { type: 'string' },
+                  reportsTo: { type: 'string', format: 'uuid' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Role assigned successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' },
+                    data: { $ref: '#/components/schemas/UserResponse' }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
 
     '/api/auth/admin/users/{id}': {
       get: {
-        summary: 'Get User by ID (Admin Only)',
+        summary: 'Get User Details (Admin Only)',
         description: 'Get detailed user information including manager and subordinates',
         tags: ['Admin'],
-        security: [{
-          bearerAuth: []
-        }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           {
             name: 'id',
             in: 'path',
             required: true,
-            description: 'User UUID',
-            schema: {
-              type: 'string',
-              format: 'uuid'
-            }
+            schema: { type: 'string', format: 'uuid' }
           }
         ],
         responses: {
@@ -1380,24 +1915,17 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
+                    success: { type: 'boolean', example: true },
                     data: {
                       allOf: [
                         { $ref: '#/components/schemas/UserResponse' },
                         {
                           type: 'object',
                           properties: {
-                            manager: {
-                              $ref: '#/components/schemas/ManagerResponse'
-                            },
+                            manager: { $ref: '#/components/schemas/ManagerResponse' },
                             subordinates: {
                               type: 'array',
-                              items: {
-                                $ref: '#/components/schemas/ManagerResponse'
-                              }
+                              items: { $ref: '#/components/schemas/ManagerResponse' }
                             }
                           }
                         }
@@ -1408,37 +1936,23 @@ Complete audit management system with 8 specialized user roles, OTP and password
               }
             }
           },
-          '401': {
-            $ref: '#/components/responses/Unauthorized'
-          },
-          '403': {
-            $ref: '#/components/responses/Forbidden'
-          },
-          '404': {
-            $ref: '#/components/responses/NotFound'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       },
       put: {
         summary: 'Update User (Admin Only)',
-        description: 'Update user role, department, or manager',
+        description: 'Update user details',
         tags: ['Admin'],
-        security: [{
-          bearerAuth: []
-        }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           {
             name: 'id',
             in: 'path',
             required: true,
-            description: 'User UUID',
-            schema: {
-              type: 'string',
-              format: 'uuid'
-            }
+            schema: { type: 'string', format: 'uuid' }
           }
         ],
         requestBody: {
@@ -1448,22 +1962,11 @@ Complete audit management system with 8 specialized user roles, OTP and password
               schema: {
                 type: 'object',
                 properties: {
-                  role: {
-                    $ref: '#/components/schemas/UserRole'
-                  },
-                  department: {
-                    type: 'string'
-                  },
-                  employeeId: {
-                    type: 'string'
-                  },
-                  reportsTo: {
-                    type: 'string',
-                    format: 'uuid'
-                  },
-                  isActive: {
-                    type: 'boolean'
-                  }
+                  role: { $ref: '#/components/schemas/UserRole' },
+                  department: { type: 'string' },
+                  employeeId: { type: 'string' },
+                  reportsTo: { type: 'string', format: 'uuid' },
+                  isActive: { type: 'boolean' }
                 }
               }
             }
@@ -1477,56 +1980,32 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
-                    message: {
-                      type: 'string',
-                      example: 'User updated successfully'
-                    },
-                    data: {
-                      $ref: '#/components/schemas/UserResponse'
-                    }
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' },
+                    data: { $ref: '#/components/schemas/UserResponse' }
                   }
                 }
               }
             }
           },
-          '400': {
-            $ref: '#/components/responses/BadRequest'
-          },
-          '401': {
-            $ref: '#/components/responses/Unauthorized'
-          },
-          '403': {
-            $ref: '#/components/responses/Forbidden'
-          },
-          '404': {
-            $ref: '#/components/responses/NotFound'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       },
       delete: {
         summary: 'Deactivate User (Admin Only)',
-        description: 'Deactivate a user account (soft delete)',
+        description: 'Deactivate a user account',
         tags: ['Admin'],
-        security: [{
-          bearerAuth: []
-        }],
+        security: [{ bearerAuth: [] }],
         parameters: [
           {
             name: 'id',
             in: 'path',
             required: true,
-            description: 'User UUID',
-            schema: {
-              type: 'string',
-              format: 'uuid'
-            }
+            schema: { type: 'string', format: 'uuid' }
           }
         ],
         responses: {
@@ -1537,31 +2016,17 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
-                    message: {
-                      type: 'string',
-                      example: 'User deactivated successfully'
-                    }
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' }
                   }
                 }
               }
             }
           },
-          '401': {
-            $ref: '#/components/responses/Unauthorized'
-          },
-          '403': {
-            $ref: '#/components/responses/Forbidden'
-          },
-          '404': {
-            $ref: '#/components/responses/NotFound'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     },
@@ -1569,11 +2034,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/admin/org-chart': {
       get: {
         summary: 'Get Organization Chart',
-        description: 'Get hierarchical organization structure based on reportsTo relationships',
+        description: 'Get hierarchical organization structure',
         tags: ['Admin'],
-        security: [{
-          bearerAuth: []
-        }],
+        security: [{ bearerAuth: [] }],
         responses: {
           '200': {
             description: 'Organization chart retrieved',
@@ -1582,10 +2045,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 schema: {
                   type: 'object',
                   properties: {
-                    success: {
-                      type: 'boolean',
-                      example: true
-                    },
+                    success: { type: 'boolean', example: true },
                     data: {
                       type: 'array',
                       items: {
@@ -1607,15 +2067,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
               }
             }
           },
-          '401': {
-            $ref: '#/components/responses/Unauthorized'
-          },
-          '403': {
-            $ref: '#/components/responses/Forbidden'
-          },
-          '500': {
-            $ref: '#/components/responses/ServerError'
-          }
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
         }
       }
     }
@@ -1632,6 +2086,8 @@ const swaggerOptions = {
     .swagger-ui .info .description { font-size: 14px; line-height: 1.6; }
     .swagger-ui .model-box { background-color: #f9fafb; }
     .swagger-ui table { width: 100%; }
+    .swagger-ui .opblock-tag { font-size: 18px; font-weight: bold; }
+    .swagger-ui .opblock .opblock-summary-path { font-weight: bold; }
   `,
   customSiteTitle: "KovaPage Audit API Documentation",
   swaggerOptions: {

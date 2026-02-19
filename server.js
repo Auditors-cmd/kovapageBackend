@@ -87,6 +87,9 @@ initializeDatabase();
 // =====================================================
 app.use(helmet());
 
+// Serve static files from uploads directory
+app.use('/uploads', express.static('uploads'));
+
 // CORS CONFIGURATION (ALLOWS ALL ORIGINS)
 app.use(cors({
   origin: '*',
