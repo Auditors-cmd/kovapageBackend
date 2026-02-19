@@ -123,12 +123,12 @@ const RiskAssessment = sequelize.define('RiskAssessment', {
     {
       fields: ['createdBy']
     },
-    {
-      fields: ['assessmentDate']
-    },
-    {
-      fields: ['department']
-    }
+   // {
+   //   fields: ['assessmentDate']
+   // },
+   // {
+    //  fields: ['department']
+  //  }
   ]
 });
 
