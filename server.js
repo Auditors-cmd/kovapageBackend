@@ -14,14 +14,14 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 
-// DATABASE INITIALIZATION
+// DATABASE ...this is with sequelize
 
 const initializeDatabase = async () => {
   try {
     // Test connection
     await testConnection();
     
-    // Sync models (create tables if they don't exist)
+ 
     await sequelize.sync({ force: false }); // we shall use { force: true } only in development to drop tables
     console.log('✅ PostgreSQL tables synced successfully');
   } catch (error) {
@@ -35,7 +35,29 @@ initializeDatabase();
 
 // SECURITY MIDDLEWARE
 app.use(helmet());
-app.use(cors());
+
+// =======================
+// SIMPLE CORS CONFIGURATION (ALLOWS ALL ORIGINS)
+// =======================
+app.use(cors({
+  origin: '*', // Allow all origins (simplest for development)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
+// Optional: Log CORS requests for debugging
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.json());
 
 // Rate limiting
@@ -165,4 +187,5 @@ app.listen(PORT, () => {
   console.log(` Health Check: http://localhost:${PORT}/api/health`);
   console.log(`Swagger Docs: http://localhost:${PORT}/api-docs`);
   console.log(' Database: PostgreSQL');
+  console.log('CORS is being Enabled for all origins');
 });
