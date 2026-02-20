@@ -9,7 +9,7 @@ const { sendOTPEmail, sendWelcomeEmail, sendPasswordResetEmail } = require('../u
 const { createOTP, verifyOTP } = require('../utils/otpService');
 const { protect } = require('../middleware/auth');
 const { hasRoleLevel } = require('../middleware/roles');
-const upload = require('../middleware/upload');
+const { uploadProfilePhoto, deleteFromCloudinary } = require('../middleware/upload'); // Updated import
 
 const router = express.Router();
 
@@ -64,17 +64,18 @@ const getWelcomeMessage = (role, name) => {
 // PASSWORD AUTHENTICATION
 // =======================
 
-// @desc    Register new user with profile photo
+// @desc    Register new user with profile photo (Cloudinary)
 // @route   POST /api/auth/register
 // @access  Public
-router.post('/register', upload.single('profilePhoto'), async (req, res) => {
+router.post('/register', uploadProfilePhoto.single('profilePhoto'), async (req, res) => {
   try {
     const { name, email, password } = req.body;
     const profilePhoto = req.file;
 
     // Validation
     if (!name || !email || !password) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
+      // If there's a file uploaded to Cloudinary, we don't need to delete it locally
+      // Cloudinary handles cleanup automatically if needed
       return res.status(400).json({
         success: false,
         message: 'Please provide name, email, and password'
@@ -82,7 +83,6 @@ router.post('/register', upload.single('profilePhoto'), async (req, res) => {
     }
 
     if (password.length < 8) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
       return res.status(400).json({
         success: false,
         message: 'Password must be at least 8 characters'
@@ -90,7 +90,6 @@ router.post('/register', upload.single('profilePhoto'), async (req, res) => {
     }
 
     if (!isValidEmail(email)) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
       return res.status(400).json({
         success: false,
         message: 'Please provide a valid email address'
@@ -103,7 +102,10 @@ router.post('/register', upload.single('profilePhoto'), async (req, res) => {
     });
 
     if (existingUser) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
+      // If there was a photo uploaded and user exists, optionally delete from Cloudinary
+      if (profilePhoto) {
+        await deleteFromCloudinary(profilePhoto.filename).catch(console.warn);
+      }
       return res.status(400).json({
         success: false,
         message: 'User with this email already exists'
@@ -122,11 +124,10 @@ router.post('/register', upload.single('profilePhoto'), async (req, res) => {
       lastLogin: new Date()
     };
 
-    // Add profile photo if uploaded
+    // Add profile photo if uploaded (Cloudinary)
     if (profilePhoto) {
-      const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-      userData.profilePhoto = profilePhoto.filename;
-      userData.profilePhotoUrl = `${baseUrl}/uploads/profiles/${profilePhoto.filename}`;
+      userData.profilePhotoPublicId = profilePhoto.filename; // Cloudinary public ID
+      userData.profilePhotoUrl = profilePhoto.path; // Cloudinary URL
     }
 
     // Create user
@@ -141,7 +142,6 @@ router.post('/register', upload.single('profilePhoto'), async (req, res) => {
           name: user.name,
           email: user.email,
           role: user.role,
-          profilePhoto: user.profilePhoto,
           profilePhotoUrl: user.profilePhotoUrl,
           isEmailVerified: user.isEmailVerified,
           authMethod: user.authMethod,
@@ -155,7 +155,11 @@ router.post('/register', upload.single('profilePhoto'), async (req, res) => {
 
   } catch (error) {
     console.error('Registration error:', error);
-    if (req.file) fs.unlinkSync(req.file.path);
+    
+    // If there was an error and a file was uploaded, clean up from Cloudinary
+    if (req.file) {
+      await deleteFromCloudinary(req.file.filename).catch(console.warn);
+    }
     
     if (error.name === 'SequelizeUniqueConstraintError') {
       return res.status(400).json({
@@ -205,7 +209,6 @@ router.post('/login', async (req, res) => {
             name: user.name,
             email: user.email,
             role: user.role,
-            profilePhoto: user.profilePhoto,
             profilePhotoUrl: user.profilePhotoUrl,
             isEmailVerified: user.isEmailVerified,
             authMethod: user.authMethod,
@@ -233,13 +236,13 @@ router.post('/login', async (req, res) => {
 });
 
 // =======================
-// PROFILE PHOTO UPLOAD
+// PROFILE PHOTO UPLOAD (Cloudinary)
 // =======================
 
 // @desc    Update profile photo
 // @route   PUT /api/auth/update-photo
 // @access  Private
-router.put('/update-photo', protect, upload.single('profilePhoto'), async (req, res) => {
+router.put('/update-photo', protect, uploadProfilePhoto.single('profilePhoto'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({
@@ -250,35 +253,64 @@ router.put('/update-photo', protect, upload.single('profilePhoto'), async (req, 
 
     const user = await User.findByPk(req.user.id);
     
-    // Delete old photo if exists
-    if (user.profilePhoto) {
-      const oldPhotoPath = path.join('uploads/profiles', user.profilePhoto);
-      if (fs.existsSync(oldPhotoPath)) {
-        fs.unlinkSync(oldPhotoPath);
-      }
+    // Delete old photo from Cloudinary if exists
+    if (user.profilePhotoPublicId) {
+      await deleteFromCloudinary(user.profilePhotoPublicId);
     }
 
-    // Update with new photo
-    const baseUrl = process.env.BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
-    user.profilePhoto = req.file.filename;
-    user.profilePhotoUrl = `${baseUrl}/uploads/profiles/${req.file.filename}`;
+    // Update with new photo (Cloudinary)
+    user.profilePhotoPublicId = req.file.filename;
+    user.profilePhotoUrl = req.file.path;
     await user.save();
 
     res.json({
       success: true,
       message: 'Profile photo updated successfully',
       data: {
-        profilePhoto: user.profilePhoto,
         profilePhotoUrl: user.profilePhotoUrl
       }
     });
 
   } catch (error) {
     console.error('Update photo error:', error);
-    if (req.file) fs.unlinkSync(req.file.path);
+    // Clean up the newly uploaded file if there was an error
+    if (req.file) {
+      await deleteFromCloudinary(req.file.filename).catch(console.warn);
+    }
     res.status(500).json({
       success: false,
       message: 'Error updating profile photo'
+    });
+  }
+});
+
+// @desc    Delete profile photo
+// @route   DELETE /api/auth/delete-photo
+// @access  Private
+router.delete('/delete-photo', protect, async (req, res) => {
+  try {
+    const user = await User.findByPk(req.user.id);
+    
+    if (user.profilePhotoPublicId) {
+      // Delete from Cloudinary
+      await deleteFromCloudinary(user.profilePhotoPublicId);
+      
+      // Clear from database
+      user.profilePhotoPublicId = null;
+      user.profilePhotoUrl = null;
+      await user.save();
+    }
+
+    res.json({
+      success: true,
+      message: 'Profile photo deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete photo error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting profile photo'
     });
   }
 });
@@ -324,6 +356,7 @@ router.put('/update-role', protect, async (req, res) => {
         name: user.name,
         email: user.email,
         role: user.role,
+        profilePhotoUrl: user.profilePhotoUrl,
         roleSelectedAt: user.roleSelectedAt,
         dashboard: getDashboardByRole(role),
         welcomeMessage: getWelcomeMessage(role, user.name)
@@ -354,7 +387,8 @@ router.get('/role-status', protect, async (req, res) => {
         needsSelection: needsRoleSelection,
         roleSelectedAt: user.roleSelectedAt,
         availableRoles: VALID_ROLES,
-        dashboard: getDashboardByRole(user.role)
+        dashboard: getDashboardByRole(user.role),
+        profilePhotoUrl: user.profilePhotoUrl
       }
     });
 
@@ -393,6 +427,7 @@ router.post('/forgot-password', async (req, res) => {
     });
     
     if (!user) {
+      // Don't reveal if user exists or not for security
       return res.json({
         success: true,
         message: 'If an account with that email exists, a reset code has been sent'
@@ -444,10 +479,10 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    if (newPassword.length < 6) {
+    if (newPassword.length < 8) {
       return res.status(400).json({
         success: false,
-        message: 'Password must be at least 6 characters long'
+        message: 'Password must be at least 8 characters long'
       });
     }
 
@@ -496,13 +531,15 @@ router.post('/reset-password', async (req, res) => {
 // @desc    Request OTP for registration
 // @route   POST /api/auth/email/register
 // @access  Public
-router.post('/email/register', upload.single('profilePhoto'), async (req, res) => {
+router.post('/email/register', uploadProfilePhoto.single('profilePhoto'), async (req, res) => {
   try {
     const { email, name } = req.body;
     const profilePhoto = req.file;
 
     if (!email || !name) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
+      if (profilePhoto) {
+        await deleteFromCloudinary(profilePhoto.filename).catch(console.warn);
+      }
       return res.status(400).json({
         success: false,
         message: 'Please provide both email and name'
@@ -510,7 +547,9 @@ router.post('/email/register', upload.single('profilePhoto'), async (req, res) =
     }
 
     if (!isValidEmail(email)) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
+      if (profilePhoto) {
+        await deleteFromCloudinary(profilePhoto.filename).catch(console.warn);
+      }
       return res.status(400).json({
         success: false,
         message: 'Please provide a valid email address'
@@ -518,7 +557,9 @@ router.post('/email/register', upload.single('profilePhoto'), async (req, res) =
     }
 
     if (name.trim().length < 2) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
+      if (profilePhoto) {
+        await deleteFromCloudinary(profilePhoto.filename).catch(console.warn);
+      }
       return res.status(400).json({
         success: false,
         message: 'Name must be at least 2 characters long'
@@ -530,7 +571,9 @@ router.post('/email/register', upload.single('profilePhoto'), async (req, res) =
     });
 
     if (existingUser) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
+      if (profilePhoto) {
+        await deleteFromCloudinary(profilePhoto.filename).catch(console.warn);
+      }
       return res.status(400).json({
         success: false,
         message: 'An account with this email already exists'
@@ -541,7 +584,9 @@ router.post('/email/register', upload.single('profilePhoto'), async (req, res) =
     const emailResult = await sendOTPEmail(email, otp, name);
 
     if (!emailResult.success) {
-      if (profilePhoto) fs.unlinkSync(profilePhoto.path);
+      if (profilePhoto) {
+        await deleteFromCloudinary(profilePhoto.filename).catch(console.warn);
+      }
       return res.status(500).json({
         success: false,
         message: 'Failed to send verification email. Please try again.',
@@ -549,19 +594,26 @@ router.post('/email/register', upload.single('profilePhoto'), async (req, res) =
       });
     }
 
+    // Store photo info temporarily (you might want to save this in a temporary store)
+    // For now, we'll just return success and let the verify endpoint handle the photo
+    // The photo is already uploaded to Cloudinary but not yet associated with a user
+
     res.json({
       success: true,
       message: `Verification code sent to ${email}`,
       data: {
         email: email.toLowerCase(),
         name: name.trim(),
-        hasProfilePhoto: !!profilePhoto
+        hasProfilePhoto: !!profilePhoto,
+        photoPublicId: profilePhoto?.filename // Send back so verify endpoint can use it
       }
     });
 
   } catch (error) {
     console.error('Email registration error:', error);
-    if (req.file) fs.unlinkSync(req.file.path);
+    if (req.file) {
+      await deleteFromCloudinary(req.file.filename).catch(console.warn);
+    }
     res.status(500).json({
       success: false,
       message: 'Server error during registration'
@@ -574,7 +626,7 @@ router.post('/email/register', upload.single('profilePhoto'), async (req, res) =
 // @access  Public
 router.post('/email/verify', async (req, res) => {
   try {
-    const { email, name, otp } = req.body;
+    const { email, name, otp, photoPublicId } = req.body;
 
     if (!email || !name || !otp) {
       return res.status(400).json({
@@ -599,7 +651,7 @@ router.post('/email/verify', async (req, res) => {
       });
     }
 
-    // Create user
+    // Prepare user data
     const userData = {
       name: name.trim(),
       email: email.toLowerCase(),
@@ -610,6 +662,15 @@ router.post('/email/verify', async (req, res) => {
       lastLogin: new Date()
     };
 
+    // If there was a photo uploaded during OTP request, associate it
+    if (photoPublicId) {
+      // You'll need to get the URL from Cloudinary using the public ID
+      // This is simplified - you might want to store the mapping in a temporary store
+      userData.profilePhotoPublicId = photoPublicId;
+      userData.profilePhotoUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/${photoPublicId}`;
+    }
+
+    // Create user
     const user = await User.create(userData);
     const token = generateToken(user.id);
 
@@ -625,7 +686,6 @@ router.post('/email/verify', async (req, res) => {
           name: user.name,
           email: user.email,
           role: user.role,
-          profilePhoto: user.profilePhoto,
           profilePhotoUrl: user.profilePhotoUrl,
           isEmailVerified: user.isEmailVerified,
           authMethod: user.authMethod,
@@ -763,7 +823,6 @@ router.post('/email/verify-login', async (req, res) => {
           name: user.name,
           email: user.email,
           role: user.role,
-          profilePhoto: user.profilePhoto,
           profilePhotoUrl: user.profilePhotoUrl,
           isEmailVerified: user.isEmailVerified,
           authMethod: user.authMethod,

@@ -1,46 +1,16 @@
 const express = require('express');
 const { protect } = require('../middleware/auth');
 const { hasRoleLevel } = require('../middleware/roles');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const { Op } = require('sequelize'); // Add this import
+const { Op } = require('sequelize');
 const RiskAssessment = require('../models/RiskAssessment');
 const AuditPlan = require('../models/AuditPlan');
 const MonitoringDashboard = require('../models/MonitoringDashboard');
 const User = require('../models/User');
 const { sequelize } = require('../config/database');
+const { uploadRiskData, deleteFromCloudinary } = require('../middleware/upload'); // Import Cloudinary uploader
+const cloudinary = require('../config/cloudinary'); // Import cloudinary config
 
 const router = express.Router();
-
-// Configure multer for file uploads
-const storage = multer.diskStorage({
-    
-  destination: (req, file, cb) => {
-    const uploadDir = 'uploads/risk-data';
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'risk-data-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/json', 'text/csv'];
-    if (allowedTypes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type. Only Excel, JSON, and CSV files are allowed.'));
-    }
-  }
-});
 
 // All QA routes require authentication and quality_assurance role or higher
 router.use(protect);
@@ -50,12 +20,13 @@ router.use(hasRoleLevel('quality_assurance'));
 // RISK ASSESSMENT ENDPOINTS
 // =======================
 
-// @desc    Upload risk data
+// @desc    Upload risk data to Cloudinary
 // @route   POST /api/qa/upload-risk-data
 // @access  Quality Assurance and above
-router.post('/upload-risk-data', upload.single('riskFile'), async (req, res) => {
+router.post('/upload-risk-data', uploadRiskData.single('riskFile'), async (req, res) => {
   try {
     const { title, description, department, assessmentDate, riskData } = req.body;
+    const riskFile = req.file;
     
     // Parse risk data if provided as JSON string
     let parsedRiskData = {};
@@ -67,14 +38,15 @@ router.post('/upload-risk-data', upload.single('riskFile'), async (req, res) => 
       }
     }
 
-    // If file was uploaded, process it
-    if (req.file) {
+    // If file was uploaded to Cloudinary, process it
+    if (riskFile) {
       parsedRiskData.fileInfo = {
-        filename: req.file.filename,
-        originalName: req.file.originalname,
-        path: req.file.path,
-        size: req.file.size,
-        mimetype: req.file.mimetype
+        filename: riskFile.filename, // Cloudinary public ID
+        originalName: riskFile.originalname,
+        url: riskFile.path, // Cloudinary URL
+        size: riskFile.size,
+        format: riskFile.format,
+        resourceType: riskFile.resource_type
       };
     }
 
@@ -84,15 +56,16 @@ router.post('/upload-risk-data', upload.single('riskFile'), async (req, res) => 
     const mediumRiskCount = parsedRiskData.risks?.filter(r => r.severity === 'medium').length || 0;
     const lowRiskCount = parsedRiskData.risks?.filter(r => r.severity === 'low').length || 0;
 
-    // Create risk assessment
+    // Create risk assessment with Cloudinary info
     const riskAssessment = await RiskAssessment.create({
       title: title || 'Risk Assessment Upload',
       description,
       status: 'pending',
       riskData: parsedRiskData,
-      originalFileName: req.file?.originalname,
-      fileUrl: req.file?.path,
-      fileSize: req.file?.size,
+      originalFileName: riskFile?.originalname,
+      fileUrl: riskFile?.path, // Cloudinary URL
+      fileSize: riskFile?.size,
+      cloudinaryPublicId: riskFile?.filename, // Store public ID for potential deletion
       totalRisks,
       highRiskCount,
       mediumRiskCount,
@@ -104,7 +77,8 @@ router.post('/upload-risk-data', upload.single('riskFile'), async (req, res) => 
       metadata: {
         uploadedBy: req.user.name,
         uploadDate: new Date(),
-        fileType: req.file?.mimetype
+        fileType: riskFile?.mimetype,
+        cloudinaryUrl: riskFile?.path
       }
     });
 
@@ -113,16 +87,67 @@ router.post('/upload-risk-data', upload.single('riskFile'), async (req, res) => 
 
     res.status(201).json({
       success: true,
-      message: 'Risk data uploaded successfully',
-      data: riskAssessment
+      message: 'Risk data uploaded successfully to Cloudinary',
+      data: {
+        id: riskAssessment.id,
+        title: riskAssessment.title,
+        fileUrl: riskAssessment.fileUrl,
+        cloudinaryPublicId: riskAssessment.cloudinaryPublicId
+      }
     });
 
   } catch (error) {
     console.error('Upload risk data error:', error);
+    
+    // Clean up Cloudinary file if there was an error
+    if (req.file) {
+      await deleteFromCloudinary(req.file.filename).catch(console.warn);
+    }
+    
     res.status(500).json({
       success: false,
       message: 'Error uploading risk data',
       error: error.message
+    });
+  }
+});
+
+// @desc    Delete risk assessment and its file from Cloudinary
+// @route   DELETE /api/qa/risk-assessments/:id
+// @access  Quality Assurance and above
+router.delete('/risk-assessments/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const riskAssessment = await RiskAssessment.findByPk(id);
+    if (!riskAssessment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Risk assessment not found'
+      });
+    }
+
+    // Delete file from Cloudinary if it exists
+    if (riskAssessment.cloudinaryPublicId) {
+      await deleteFromCloudinary(riskAssessment.cloudinaryPublicId);
+    }
+
+    // Delete the record
+    await riskAssessment.destroy();
+
+    // Update dashboard metrics
+    await updateDashboardMetrics(req.user.id);
+
+    res.json({
+      success: true,
+      message: 'Risk assessment deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete risk assessment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting risk assessment'
     });
   }
 });
@@ -140,8 +165,8 @@ router.get('/risk-assessments', async (req, res) => {
     if (department) where.department = department;
     if (fromDate || toDate) {
       where.assessmentDate = {};
-      if (fromDate) where.assessmentDate.$gte = new Date(fromDate);
-      if (toDate) where.assessmentDate.$lte = new Date(toDate);
+      if (fromDate) where.assessmentDate[Op.gte] = new Date(fromDate);
+      if (toDate) where.assessmentDate[Op.lte] = new Date(toDate);
     }
 
     // Get all risk assessments
@@ -151,7 +176,7 @@ router.get('/risk-assessments', async (req, res) => {
       include: [{
         model: User,
         as: 'creator',
-        attributes: ['id', 'name', 'email', 'role']
+        attributes: ['id', 'name', 'email', 'role', 'profilePhotoUrl']
       }]
     });
 
@@ -178,7 +203,11 @@ router.get('/risk-assessments', async (req, res) => {
 
     res.json({
       success: true,
-      data: riskAssessments,
+      data: riskAssessments.map(ra => ({
+        ...ra.toJSON(),
+        fileUrl: ra.fileUrl, // Cloudinary URL
+        cloudinaryPublicId: ra.cloudinaryPublicId
+      })),
       summary: {
         total: riskAssessments.length,
         counts,
@@ -297,7 +326,7 @@ router.get('/dashboard', async (req, res) => {
       include: [{
         model: User,
         as: 'creator',
-        attributes: ['id', 'name']
+        attributes: ['id', 'name', 'profilePhotoUrl']
       }]
     });
 
@@ -326,7 +355,9 @@ router.get('/dashboard', async (req, res) => {
         title: r.title,
         status: r.status,
         date: r.createdAt,
-        user: r.creator?.name
+        user: r.creator?.name,
+        userPhoto: r.creator?.profilePhotoUrl,
+        fileUrl: r.fileUrl // Cloudinary URL
       })),
       charts: {
         riskDistribution: {
@@ -349,7 +380,7 @@ router.get('/dashboard', async (req, res) => {
         },
         {
           name: 'Consolidate Plans',
-          description: `${pendingPlans} unit plans to review`,
+          description: `${pendingPlans} unit plan${pendingPlans !== 1 ? 's' : ''} to review`,
           endpoint: '/api/qa/consolidate-plans',
           icon: 'merge'
         }
@@ -400,7 +431,7 @@ router.get('/dashboard', async (req, res) => {
 });
 
 // =======================
-// ENHANCED DASHBOARD WITH CHARTS (NEW)
+// ENHANCED DASHBOARD WITH CHARTS
 // =======================
 
 // @desc    Get enhanced QA dashboard data with charts and metrics
@@ -542,6 +573,13 @@ router.get('/dashboard-data', async (req, res) => {
       }
     });
 
+    // Get total files stored in Cloudinary
+    const totalRiskFiles = await RiskAssessment.count({
+      where: {
+        cloudinaryPublicId: { [Op.ne]: null }
+      }
+    });
+
     // =====================================================
     // 4. Compile complete dashboard data
     // =====================================================
@@ -609,6 +647,11 @@ router.get('/dashboard-data', async (req, res) => {
           total: totalAudits,
           byStatus: historySummary,
           icon: 'history'
+        },
+        cloudinaryStorage: {
+          label: 'Files in Cloudinary',
+          count: totalRiskFiles,
+          icon: 'cloud'
         }
       },
       
@@ -616,7 +659,8 @@ router.get('/dashboard-data', async (req, res) => {
       summary: {
         totalAudits,
         pendingReviews: pendingPlansCount,
-        completedThisYear: Object.values(auditPerformance.currentYear.quarters).reduce((a, b) => a + b, 0)
+        completedThisYear: Object.values(auditPerformance.currentYear.quarters).reduce((a, b) => a + b, 0),
+        totalCloudinaryFiles: totalRiskFiles
       }
     };
 
@@ -656,12 +700,12 @@ router.get('/audit-plans', async (req, res) => {
         {
           model: User,
           as: 'teamLead',
-          attributes: ['id', 'name', 'email']
+          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
         },
         {
           model: RiskAssessment,
           as: 'riskAssessment',
-          attributes: ['id', 'title', 'status']
+          attributes: ['id', 'title', 'status', 'fileUrl', 'cloudinaryPublicId']
         }
       ]
     });
@@ -708,7 +752,12 @@ router.post('/consolidate-plans', async (req, res) => {
     const plans = await AuditPlan.findAll({
       where: {
         id: planIds
-      }
+      },
+      include: [{
+        model: RiskAssessment,
+        as: 'riskAssessment',
+        attributes: ['fileUrl', 'cloudinaryPublicId']
+      }]
     });
 
     if (plans.length !== planIds.length) {
@@ -723,9 +772,20 @@ router.post('/consolidate-plans', async (req, res) => {
 
     // Combine audit areas from all plans
     const allAuditAreas = [];
+    const attachedFiles = [];
+    
     plans.forEach(plan => {
       if (plan.auditAreas && Array.isArray(plan.auditAreas)) {
         allAuditAreas.push(...plan.auditAreas);
+      }
+      // Collect Cloudinary file info
+      if (plan.riskAssessment?.fileUrl) {
+        attachedFiles.push({
+          planId: plan.id,
+          planTitle: plan.title,
+          fileUrl: plan.riskAssessment.fileUrl,
+          cloudinaryPublicId: plan.riskAssessment.cloudinaryPublicId
+        });
       }
     });
 
@@ -745,8 +805,10 @@ router.post('/consolidate-plans', async (req, res) => {
         sourcePlans: plans.map(p => ({
           id: p.id,
           title: p.title,
-          planNumber: p.planNumber
-        }))
+          planNumber: p.planNumber,
+          riskFileUrl: p.riskAssessment?.fileUrl
+        })),
+        attachedFiles
       }
     });
 
@@ -769,7 +831,10 @@ router.post('/consolidate-plans', async (req, res) => {
     res.status(201).json({
       success: true,
       message: `Successfully consolidated ${plans.length} plans`,
-      data: consolidatedPlan
+      data: {
+        ...consolidatedPlan.toJSON(),
+        attachedFiles
+      }
     });
 
   } catch (error) {
@@ -791,6 +856,7 @@ router.get('/download-template', (req, res) => {
       version: '1.0',
       templateType: 'operational_risk_data',
       instructions: 'Fill in your risk data following this structure',
+      storage: 'Files will be uploaded to Cloudinary',
       example: {
         risks: [
           {
@@ -862,8 +928,19 @@ async function updateDashboardMetrics(userId) {
         if (item.status === 'completed') counts.completed = parseInt(item.dataValues.count);
       });
 
+      // Get Cloudinary file count
+      const cloudinaryFiles = await RiskAssessment.count({
+        where: {
+          cloudinaryPublicId: { [Op.ne]: null }
+        }
+      });
+
       await dashboard.update({
         riskSummary: counts,
+        metadata: {
+          ...dashboard.metadata,
+          cloudinaryFiles
+        },
         updatedAt: new Date()
       });
     }

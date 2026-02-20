@@ -32,6 +32,11 @@ Complete audit management system with 8 specialized user roles, OTP and password
 - **Minimum Length**: 8 characters
 - **Mix of letters & numbers recommended**
 
+## File Storage
+- **Cloudinary Integration**: All files (profile photos, risk data) stored in Cloudinary CDN
+- **Profile Photos**: Automatically optimized and resized
+- **Risk Data Files**: Excel, CSV, JSON files stored securely
+
 ## Database
 - **PostgreSQL**: Relational database for user management
 - **UUID Primary Keys**: Secure user identification
@@ -88,7 +93,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     },
     {
       name: 'Quality Assurance',
-      description: 'QA dashboard, risk assessment, and audit plan consolidation'
+      description: 'QA dashboard, risk assessment, and audit plan consolidation (Cloudinary storage)'
     },
     {
       name: 'Admin',
@@ -170,7 +175,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           profilePhoto: {
             type: 'string',
             format: 'binary',
-            description: 'Profile photo image file (jpeg, png, gif, webp) - max 5MB'
+            description: 'Profile photo image file (jpeg, png, gif, webp) - max 5MB. Uploaded to Cloudinary.'
           }
         }
       },
@@ -202,7 +207,8 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 type: 'array',
                 items: { $ref: '#/components/schemas/UserRole' }
               },
-              dashboard: { type: 'string', example: '/qa/dashboard' }
+              dashboard: { type: 'string', example: '/qa/dashboard' },
+              profilePhotoUrl: { type: 'string', example: 'https://res.cloudinary.com/.../profile.jpg' }
             }
           }
         }
@@ -226,7 +232,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           profilePhoto: {
             type: 'string',
             format: 'binary',
-            description: 'Profile photo image file (optional)'
+            description: 'Profile photo image file (optional) - uploaded to Cloudinary'
           }
         }
       },
@@ -248,12 +254,18 @@ Complete audit management system with 8 specialized user roles, OTP and password
             type: 'string',
             example: '123456',
             description: '6-digit OTP code'
+          },
+          photoPublicId: {
+            type: 'string',
+            example: 'kovapage/profiles/user-123-123456789',
+            description: 'Cloudinary public ID from registration step (if photo was uploaded)'
           }
         },
         example: {
           email: 'auditor@company.com',
           name: 'John Auditor',
-          otp: '123456'
+          otp: '123456',
+          photoPublicId: 'kovapage/profiles/user-new-123456789'
         }
       },
       
@@ -431,6 +443,19 @@ Complete audit management system with 8 specialized user roles, OTP and password
         }
       },
 
+      // Cloudinary File Info
+      CloudinaryFileInfo: {
+        type: 'object',
+        properties: {
+          filename: { type: 'string', description: 'Cloudinary public ID' },
+          originalName: { type: 'string', description: 'Original file name' },
+          url: { type: 'string', description: 'Cloudinary CDN URL', example: 'https://res.cloudinary.com/.../file.xlsx' },
+          size: { type: 'integer', description: 'File size in bytes' },
+          format: { type: 'string', description: 'File format' },
+          resourceType: { type: 'string', enum: ['image', 'raw'], description: 'Cloudinary resource type' }
+        }
+      },
+
       // QA Dashboard Schemas
       RiskAssessmentUploadRequest: {
         type: 'object',
@@ -439,11 +464,28 @@ Complete audit management system with 8 specialized user roles, OTP and password
           description: { type: 'string', example: 'Operational risk assessment for Q1' },
           department: { type: 'string', example: 'Finance' },
           assessmentDate: { type: 'string', format: 'date', example: '2024-01-15' },
+          riskData: { type: 'string', description: 'JSON string of risk data (optional)' },
           riskFile: {
             type: 'string',
             format: 'binary',
-            description: 'Risk data file (Excel, JSON, or CSV)'
+            description: 'Risk data file (Excel, JSON, or CSV) - uploaded to Cloudinary'
           }
+        }
+      },
+
+      RiskAssessmentResponse: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          title: { type: 'string' },
+          description: { type: 'string' },
+          status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+          fileUrl: { type: 'string', description: 'Cloudinary URL' },
+          cloudinaryPublicId: { type: 'string', description: 'Cloudinary public ID' },
+          originalFileName: { type: 'string' },
+          fileSize: { type: 'integer' },
+          createdAt: { type: 'string', format: 'date-time' },
+          createdBy: { type: 'object', properties: { name: { type: 'string' } } }
         }
       },
 
@@ -593,6 +635,14 @@ Complete audit management system with 8 specialized user roles, OTP and password
                       total: { type: 'integer' },
                       byStatus: { type: 'object' }
                     }
+                  },
+                  cloudinaryStorage: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', example: 'Files in Cloudinary' },
+                      count: { type: 'integer' },
+                      icon: { type: 'string', example: 'cloud' }
+                    }
                   }
                 }
               },
@@ -601,7 +651,8 @@ Complete audit management system with 8 specialized user roles, OTP and password
                 properties: {
                   totalAudits: { type: 'integer' },
                   pendingReviews: { type: 'integer' },
-                  completedThisYear: { type: 'integer' }
+                  completedThisYear: { type: 'integer' },
+                  totalCloudinaryFiles: { type: 'integer' }
                 }
               }
             }
@@ -609,7 +660,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
         }
       },
 
-      // User Response with all fields
+      // User Response with all fields including Cloudinary
       UserResponse: {
         type: 'object',
         properties: {
@@ -630,14 +681,14 @@ Complete audit management system with 8 specialized user roles, OTP and password
           role: {
             $ref: '#/components/schemas/UserRole'
           },
-          profilePhoto: {
+          profilePhotoPublicId: {
             type: 'string',
-            description: 'Profile photo filename'
+            description: 'Cloudinary public ID for profile photo'
           },
           profilePhotoUrl: {
             type: 'string',
-            description: 'Full URL to profile photo',
-            example: 'https://kovapagebackend.onrender.com/uploads/profiles/profile-123456.jpg'
+            description: 'Cloudinary CDN URL for profile photo',
+            example: 'https://res.cloudinary.com/.../profile.jpg'
           },
           department: {
             type: 'string',
@@ -698,8 +749,8 @@ Complete audit management system with 8 specialized user roles, OTP and password
           name: 'Jane Manager',
           email: 'jane.manager@company.com',
           role: 'quality_assurance',
-          profilePhoto: 'profile-123456.jpg',
-          profilePhotoUrl: 'https://kovapagebackend.onrender.com/uploads/profiles/profile-123456.jpg',
+          profilePhotoPublicId: 'kovapage/profiles/user-123-123456789',
+          profilePhotoUrl: 'https://res.cloudinary.com/demo/image/upload/kovapage/profiles/user-123-123456789.jpg',
           department: 'Internal Audit',
           employeeId: 'EMP-2024-001',
           reportsTo: '123e4567-e89b-12d3-a456-426614174000',
@@ -734,6 +785,10 @@ Complete audit management system with 8 specialized user roles, OTP and password
           },
           department: {
             type: 'string'
+          },
+          profilePhotoUrl: {
+            type: 'string',
+            description: 'Cloudinary profile photo URL'
           }
         },
         example: {
@@ -741,7 +796,8 @@ Complete audit management system with 8 specialized user roles, OTP and password
           name: 'John Chief',
           email: 'john.chief@company.com',
           role: 'chief_audit_executive',
-          department: 'Executive'
+          department: 'Executive',
+          profilePhotoUrl: 'https://res.cloudinary.com/.../profile.jpg'
         }
       },
 
@@ -791,6 +847,10 @@ Complete audit management system with 8 specialized user roles, OTP and password
               },
               hasProfilePhoto: {
                 type: 'boolean'
+              },
+              photoPublicId: {
+                type: 'string',
+                description: 'Cloudinary public ID if photo was uploaded'
               }
             }
           }
@@ -801,7 +861,8 @@ Complete audit management system with 8 specialized user roles, OTP and password
           data: {
             email: 'auditor@company.com',
             name: 'John Auditor',
-            hasProfilePhoto: true
+            hasProfilePhoto: true,
+            photoPublicId: 'kovapage/profiles/user-new-123456789'
           }
         }
       },
@@ -989,8 +1050,8 @@ Complete audit management system with 8 specialized user roles, OTP and password
     // =======================
     '/api/auth/register': {
       post: {
-        summary: 'Register with Password and Profile Photo',
-        description: 'Register a new user with email, password (min 8 characters), and optional profile photo',
+        summary: 'Register with Password and Profile Photo (Cloudinary)',
+        description: 'Register a new user with email, password (min 8 characters), and optional profile photo. Photos are uploaded to Cloudinary CDN.',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -1019,8 +1080,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
                       name: 'John Doe',
                       email: 'john@company.com',
                       role: 'auditee',
-                      profilePhoto: 'profile-123456.jpg',
-                      profilePhotoUrl: 'https://kovapagebackend.onrender.com/uploads/profiles/profile-123456.jpg',
+                      profilePhotoUrl: 'https://res.cloudinary.com/.../profile.jpg',
                       isEmailVerified: false,
                       authMethod: 'password',
                       lastLogin: '2024-01-15T10:30:00.000Z',
@@ -1084,7 +1144,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
                       name: 'John Doe',
                       email: 'john@company.com',
                       role: 'quality_assurance',
-                      profilePhotoUrl: 'https://kovapagebackend.onrender.com/uploads/profiles/profile-123456.jpg',
+                      profilePhotoUrl: 'https://res.cloudinary.com/.../profile.jpg',
                       dashboard: '/qa/dashboard',
                       needsRoleSelection: false
                     },
@@ -1147,6 +1207,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
                         name: { type: 'string' },
                         email: { type: 'string' },
                         role: { $ref: '#/components/schemas/UserRole' },
+                        profilePhotoUrl: { type: 'string' },
                         dashboard: { type: 'string' },
                         welcomeMessage: { type: 'string' }
                       }
@@ -1187,12 +1248,12 @@ Complete audit management system with 8 specialized user roles, OTP and password
     },
 
     // =======================
-    // PROFILE MANAGEMENT
+    // PROFILE MANAGEMENT (Cloudinary)
     // =======================
     '/api/auth/update-photo': {
       put: {
-        summary: 'Update Profile Photo',
-        description: 'Update user profile photo',
+        summary: 'Update Profile Photo (Cloudinary)',
+        description: 'Update user profile photo. Uploads to Cloudinary and automatically deletes old photo.',
         tags: ['Profile'],
         security: [{ bearerAuth: [] }],
         requestBody: {
@@ -1205,7 +1266,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
                   profilePhoto: {
                     type: 'string',
                     format: 'binary',
-                    description: 'Profile photo image file (jpeg, png, gif, webp) - max 5MB'
+                    description: 'Profile photo image file (jpeg, png, gif, webp) - max 5MB. Uploaded to Cloudinary.'
                   }
                 }
               }
@@ -1225,8 +1286,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
                     data: {
                       type: 'object',
                       properties: {
-                        profilePhoto: { type: 'string' },
-                        profilePhotoUrl: { type: 'string' }
+                        profilePhotoUrl: { type: 'string', example: 'https://res.cloudinary.com/.../profile.jpg' }
                       }
                     }
                   }
@@ -1241,13 +1301,40 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
+    '/api/auth/delete-photo': {
+      delete: {
+        summary: 'Delete Profile Photo',
+        description: 'Delete user profile photo from Cloudinary',
+        tags: ['Profile'],
+        security: [{ bearerAuth: [] }],
+        responses: {
+          '200': {
+            description: 'Profile photo deleted',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Profile photo deleted successfully' }
+                  }
+                }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
     // =======================
     // OTP AUTHENTICATION
     // =======================
     '/api/auth/email/register': {
       post: {
-        summary: 'Request OTP for Registration',
-        description: 'Send OTP to email for new user registration',
+        summary: 'Request OTP for Registration (with optional photo)',
+        description: 'Send OTP to email for new user registration. Optional profile photo uploads to Cloudinary.',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -1278,8 +1365,8 @@ Complete audit management system with 8 specialized user roles, OTP and password
 
     '/api/auth/email/verify': {
       post: {
-        summary: 'Verify OTP and Register',
-        description: 'Verify OTP and create user',
+        summary: 'Verify OTP and Register (with Cloudinary photo)',
+        description: 'Verify OTP and create user. Associates previously uploaded Cloudinary photo if provided.',
         tags: ['Authentication'],
         requestBody: {
           required: true,
@@ -1475,7 +1562,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/profile': {
       get: {
         summary: 'Get User Profile',
-        description: 'Get current user profile',
+        description: 'Get current user profile with Cloudinary photo URL',
         tags: ['User Management'],
         security: [{ bearerAuth: [] }],
         responses: {
@@ -1529,12 +1616,12 @@ Complete audit management system with 8 specialized user roles, OTP and password
     },
 
     // =======================
-    // QUALITY ASSURANCE ENDPOINTS
+    // QUALITY ASSURANCE ENDPOINTS (Cloudinary)
     // =======================
     '/api/qa/upload-risk-data': {
       post: {
-        summary: 'Upload Risk Data',
-        description: 'Upload operational risk data file (QA role required)',
+        summary: 'Upload Risk Data to Cloudinary',
+        description: 'Upload operational risk data file to Cloudinary (QA role required). Supports Excel, CSV, and JSON files.',
         tags: ['Quality Assurance'],
         security: [{ bearerAuth: [] }],
         requestBody: {
@@ -1549,7 +1636,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
         },
         responses: {
           '201': {
-            description: 'Risk data uploaded successfully',
+            description: 'Risk data uploaded successfully to Cloudinary',
             content: {
               'application/json': {
                 schema: {
@@ -1557,7 +1644,15 @@ Complete audit management system with 8 specialized user roles, OTP and password
                   properties: {
                     success: { type: 'boolean', example: true },
                     message: { type: 'string' },
-                    data: { type: 'object' }
+                    data: {
+                      type: 'object',
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        title: { type: 'string' },
+                        fileUrl: { type: 'string', example: 'https://res.cloudinary.com/.../file.xlsx' },
+                        cloudinaryPublicId: { type: 'string' }
+                      }
+                    }
                   }
                 }
               }
@@ -1571,10 +1666,143 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
+    '/api/qa/risk-assessments': {
+      get: {
+        summary: 'Get Risk Assessments',
+        description: 'Get all risk assessments with status counts and Cloudinary file URLs',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            description: 'Filter by status',
+            schema: { type: 'string', enum: ['pending', 'in_progress', 'completed'] }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            description: 'Filter by department',
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Risk assessments retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    data: {
+                      type: 'array',
+                      items: { $ref: '#/components/schemas/RiskAssessmentResponse' }
+                    },
+                    summary: {
+                      type: 'object',
+                      properties: {
+                        total: { type: 'integer' },
+                        pending: { type: 'integer' },
+                        inProgress: { type: 'integer' },
+                        completed: { type: 'integer' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/risk-assessments/{id}': {
+      delete: {
+        summary: 'Delete Risk Assessment',
+        description: 'Delete risk assessment and its associated file from Cloudinary',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            description: 'Risk assessment ID',
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Risk assessment deleted',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string', example: 'Risk assessment deleted successfully' }
+                  }
+                }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/risk-assessments/{id}/status': {
+      put: {
+        summary: 'Update Risk Assessment Status',
+        description: 'Update risk assessment status',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['status'],
+                properties: {
+                  status: {
+                    type: 'string',
+                    enum: ['pending', 'in_progress', 'completed']
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Status updated' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
     '/api/qa/dashboard': {
       get: {
         summary: 'Get QA Dashboard',
-        description: 'Get basic QA dashboard metrics',
+        description: 'Get basic QA dashboard metrics with Cloudinary file counts',
         tags: ['Quality Assurance'],
         security: [{ bearerAuth: [] }],
         responses: {
@@ -1602,7 +1830,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/qa/dashboard-data': {
       get: {
         summary: 'Get Enhanced QA Dashboard',
-        description: 'Get enhanced QA dashboard with charts and detailed metrics',
+        description: 'Get enhanced QA dashboard with charts, metrics, and Cloudinary storage stats',
         tags: ['Quality Assurance'],
         security: [{ bearerAuth: [] }],
         responses: {
@@ -1623,10 +1851,10 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
-    '/api/qa/risk-assessments': {
+    '/api/qa/audit-plans': {
       get: {
-        summary: 'Get Risk Assessments',
-        description: 'Get all risk assessments with status counts',
+        summary: 'Get Audit Plans',
+        description: 'Get audit plans for consolidation with Cloudinary file references',
         tags: ['Quality Assurance'],
         security: [{ bearerAuth: [] }],
         parameters: [
@@ -1634,7 +1862,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
             name: 'status',
             in: 'query',
             description: 'Filter by status',
-            schema: { type: 'string', enum: ['pending', 'in_progress', 'completed'] }
+            schema: { type: 'string' }
           },
           {
             name: 'department',
@@ -1643,21 +1871,6 @@ Complete audit management system with 8 specialized user roles, OTP and password
             schema: { type: 'string' }
           }
         ],
-        responses: {
-          '200': { description: 'Risk assessments retrieved' },
-          '401': { $ref: '#/components/responses/Unauthorized' },
-          '403': { $ref: '#/components/responses/Forbidden' },
-          '500': { $ref: '#/components/responses/ServerError' }
-        }
-      }
-    },
-
-    '/api/qa/audit-plans': {
-      get: {
-        summary: 'Get Audit Plans',
-        description: 'Get audit plans for consolidation',
-        tags: ['Quality Assurance'],
-        security: [{ bearerAuth: [] }],
         responses: {
           '200': { description: 'Audit plans retrieved' },
           '401': { $ref: '#/components/responses/Unauthorized' },
@@ -1670,7 +1883,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/qa/consolidate-plans': {
       post: {
         summary: 'Consolidate Audit Plans',
-        description: 'Consolidate multiple audit plans into one',
+        description: 'Consolidate multiple audit plans into one, preserving Cloudinary file references',
         tags: ['Quality Assurance'],
         security: [{ bearerAuth: [] }],
         requestBody: {
@@ -1712,7 +1925,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/qa/download-template': {
       get: {
         summary: 'Download Risk Template',
-        description: 'Download risk data template',
+        description: 'Download risk data template (JSON format)',
         tags: ['Quality Assurance'],
         security: [{ bearerAuth: [] }],
         responses: {
@@ -2062,7 +2275,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/admin/org-chart': {
       get: {
         summary: 'Get Organization Chart',
-        description: 'Get hierarchical organization structure',
+        description: 'Get hierarchical organization structure based on reportsTo relationships',
         tags: ['Admin'],
         security: [{ bearerAuth: [] }],
         responses: {
@@ -2083,6 +2296,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
                           name: { type: 'string' },
                           role: { $ref: '#/components/schemas/UserRole' },
                           department: { type: 'string' },
+                          profilePhotoUrl: { type: 'string' },
                           subordinates: {
                             type: 'array',
                             items: { type: 'object' }
@@ -2116,8 +2330,16 @@ const swaggerOptions = {
     .swagger-ui table { width: 100%; }
     .swagger-ui .opblock-tag { font-size: 18px; font-weight: bold; }
     .swagger-ui .opblock .opblock-summary-path { font-weight: bold; }
+    .swagger-ui .cloudinary-badge { 
+      background: #0a2c3d; 
+      color: white; 
+      padding: 2px 8px; 
+      border-radius: 12px; 
+      font-size: 10px; 
+      margin-left: 8px;
+    }
   `,
-  customSiteTitle: "KovaPage Audit API Documentation",
+  customSiteTitle: "KovaPage Audit API Documentation (Cloudinary)",
   swaggerOptions: {
     persistAuthorization: true,
     displayRequestDuration: true,
