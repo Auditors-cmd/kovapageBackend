@@ -1,23 +1,60 @@
 # Dependency directories
-node_modules/ [citation:2][citation:3][citation:7]
+node_modules/
 
 # Environment variables and sensitive data
-.env [citation:2][citation:7]
+.env
 .env.local
+.env.production
 .env.production.local
+.env.development
+.env.*
+!.env.example
+
+# Cloudinary/API keys (if ever hardcoded in any file)
+*cloudinary.js
+*config.js
 
 # Log files
-*.log [citation:3][citation:7]
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Runtime data and cache
 .npm
 .cache
+dist/
+build/
 
 # IDE and editor files
-.vscode/ [citation:2]
+.vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-# OS generated files [citation:2][citation:3]
-.DS_Store [citation:2][citation:3]
-Thumbs.db [citation:3].env
-.env.*
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Uploads (local storage - we're using Cloudinary now!)
+uploads/
+uploads/*
+!uploads/.gitkeep
+
+# Database and test files
+*.sqlite
+*.db
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
