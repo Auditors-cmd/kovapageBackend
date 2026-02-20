@@ -128,7 +128,7 @@ router.get('/:role', protect, async (req, res) => {
   } catch (error) {
     console.error('Dashboard redirect error:', error);
     res.status(500).json({
-      success: false,
+      success: true,
       message: 'Error redirecting to dashboard'
     });
   }
