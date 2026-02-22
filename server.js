@@ -13,6 +13,9 @@ console.log('🔍 NODE_ENV:', process.env.NODE_ENV);
 // =====================================================
 const { sequelize, testConnection } = require('./config/database');
 
+// =====================================================
+// IMPORT ALL MODELS
+// =====================================================
 const User = require('./models/User');
 const OTP = require('./models/OTP');
 const RiskAssessment = require('./models/RiskAssessment');
@@ -22,30 +25,48 @@ const AuditPlanTeamMember = require('./models/AuditPlanTeamMember');
 const DashboardShare = require('./models/DashboardShare');
 
 // =====================================================
-// SET UP ASSOCIATIONS
+// SET UP ASSOCIATIONS - IMPROVED VERSION
 // =====================================================
-// This ensures all relationships between models are properly configured
 const setupAssociations = () => {
-  // User associations
-  if (User.associate) {
-    User.associate({
-      OTP,
-      RiskAssessment,
-      AuditPlan,
-      MonitoringDashboard,
-      AuditPlanTeamMember,
-      DashboardShare
-    });
-  }
+  console.log('🔗 Setting up model associations...');
   
-  // Add other model associations here if needed
+  // Create a models object with all models
+  const models = {
+    User,
+    OTP,
+    RiskAssessment,
+    AuditPlan,
+    MonitoringDashboard,
+    AuditPlanTeamMember,
+    DashboardShare
+  };
+
+  // Initialize associations for each model that has an associate method
+  const modelsWithAssociations = [
+    User, 
+    OTP, 
+    RiskAssessment, 
+    AuditPlan, 
+    MonitoringDashboard, 
+    AuditPlanTeamMember, 
+    DashboardShare
+  ];
+
+  modelsWithAssociations.forEach(model => {
+    if (model.associate) {
+      model.associate(models);
+      console.log(`✅ ${model.name} associations loaded`);
+    }
+  });
+
+  // Specifically log AuditPlan associations to verify
   if (AuditPlan.associate) {
-    AuditPlan.associate({ User, RiskAssessment, AuditPlanTeamMember });
+    console.log('✅ AuditPlan associations verified');
+  } else {
+    console.log('⚠️ AuditPlan.associate method not found!');
   }
-  
-  if (MonitoringDashboard.associate) {
-    MonitoringDashboard.associate({ User, DashboardShare });
-  }
+
+  console.log('✅ All model associations initialized');
 };
 
 // Run associations setup
@@ -65,8 +86,8 @@ const initializeDatabase = async () => {
     // Test connection
     await testConnection();
     
-    // IMPORTANT: Change to { alter: true } to add missing tables without dropping data
-    await sequelize.sync({ alter: true }); // This will add missing tables/columns
+    // Sync all models with associations
+    await sequelize.sync({ alter: true });
     console.log('✅ PostgreSQL tables synced successfully');
     
     // Log which tables were created/updated
@@ -163,7 +184,15 @@ app.get('/', (req, res) => {
       'POST /api/auth/reset-password',
       'GET  /api/auth/profile',
       'GET  /api/auth/status',
-      'GET  /api/test'
+      'GET  /api/test',
+      'GET  /api/qa/audit-plans',
+      'GET  /api/qa/risk-assessments',
+      'GET  /api/qa/dashboard',
+      'GET  /api/qa/dashboard-data',
+      'POST /api/qa/upload-risk-data',
+      'POST /api/qa/upload-risk-excel',
+      'GET  /api/qa/download-risk-template',
+      'POST /api/qa/consolidate-plans'
     ],
     timestamp: new Date().toISOString()
   });
@@ -202,7 +231,7 @@ app.get('/api/test', (req, res) => {
 
 // 404 handler
 app.use((req, res) => {
-  console.log('Route not found:', req.originalUrl);
+  console.log('❌ Route not found:', req.originalUrl);
   res.status(404).json({
     success: false,
     message: 'Route not found: ' + req.originalUrl
@@ -211,11 +240,21 @@ app.use((req, res) => {
 
 // Error handler
 app.use((error, req, res, next) => {
-  console.error(' Server error:', error);
-  res.status(500).json({
-    success: false,
-    message: 'Internal server error'
-  });
+  console.error('💥 Server error:', error);
+  
+  // Send more detailed error in development
+  if (process.env.NODE_ENV === 'development') {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      stack: error.stack
+    });
+  } else {
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
 });
 
 // Graceful shutdown
