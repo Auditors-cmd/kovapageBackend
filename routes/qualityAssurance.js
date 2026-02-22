@@ -998,28 +998,28 @@ router.get('/audit-plans', async (req, res) => {
     const plans = await AuditPlan.findAll({
       where,
       order: [['createdAt', 'DESC']],
-      include: [
-        {
-          model: User,
-          as: 'creator',           // This matches 'createdAuditPlans' in User model
-          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-        },
-        {
-          model: User,
-          as: 'teamLead',           // This matches 'ledAuditPlans' in User model
-          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-        },
-        {
-          model: User,
-          as: 'approver',           // This matches 'approvedAuditPlans' in User model
-          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-        },
-        {
-          model: RiskAssessment,
-          as: 'riskAssessment',
-          attributes: ['id', 'title', 'status', 'fileUrl', 'cloudinaryPublicId']
-        }
-      ]
+     // include: [
+     //   {
+     //     model: User,
+     //     as: 'creator',           // This matches 'createdAuditPlans' in User model
+     //     attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+     //   },
+     //   {
+     //     model: User,
+     //     as: 'teamLead',           // This matches 'ledAuditPlans' in User model
+     //     attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+     //   },
+     //   {
+     //     model: User,
+     //     as: 'approver',           // This matches 'approvedAuditPlans' in User model
+     //     attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+     //   },
+     //   {
+     //     model: RiskAssessment,
+     //     as: 'riskAssessment',
+     //     attributes: ['id', 'title', 'status', 'fileUrl', 'cloudinaryPublicId']
+     //   }
+  //    ]
     });
 
     // Count plans pending review

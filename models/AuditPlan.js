@@ -140,4 +140,64 @@ const AuditPlan = sequelize.define('AuditPlan', {
   ]
 });
 
+// =======================
+// ASSOCIATIONS - ADD THIS SECTION
+// =======================
+AuditPlan.associate = (models) => {
+  // An audit plan belongs to the user who created it
+  AuditPlan.belongsTo(models.User, {
+    foreignKey: 'createdBy',
+    as: 'creator',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE'
+  });
+
+  // An audit plan belongs to the team lead
+  AuditPlan.belongsTo(models.User, {
+    foreignKey: 'teamLeadId',
+    as: 'teamLead',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE'
+  });
+
+  // An audit plan belongs to the user who approved it
+  AuditPlan.belongsTo(models.User, {
+    foreignKey: 'approvedBy',
+    as: 'approver',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE'
+  });
+
+  // An audit plan belongs to a risk assessment
+  AuditPlan.belongsTo(models.RiskAssessment, {
+    foreignKey: 'riskAssessmentId',
+    as: 'riskAssessment',
+    onDelete: 'SET NULL',
+    onUpdate: 'CASCADE'
+  });
+
+  // An audit plan can have many team members (many-to-many)
+  AuditPlan.belongsToMany(models.User, {
+    through: 'audit_plan_team_members',
+    foreignKey: 'auditPlanId',
+    otherKey: 'userId',
+    as: 'teamMembers'
+  });
+
+  // An audit plan can be consolidated from multiple other plans
+  AuditPlan.hasMany(AuditPlan, {
+    foreignKey: 'consolidatedFrom',
+    as: 'sourcePlans',
+    constraints: false // This is a self-reference, needs special handling
+  });
+
+  // An audit plan can be the source for consolidated plans
+  AuditPlan.belongsToMany(AuditPlan, {
+    through: 'audit_plan_consolidations',
+    as: 'consolidatedInto',
+    foreignKey: 'sourcePlanId',
+    otherKey: 'consolidatedPlanId'
+  });
+};
+
 module.exports = AuditPlan;
