@@ -2,13 +2,16 @@ const express = require('express');
 const { protect } = require('../middleware/auth');
 const { hasRoleLevel } = require('../middleware/roles');
 const { Op } = require('sequelize');
+const XLSX = require('xlsx');
+const path = require('path');
+const fs = require('fs');
 const RiskAssessment = require('../models/RiskAssessment');
 const AuditPlan = require('../models/AuditPlan');
 const MonitoringDashboard = require('../models/MonitoringDashboard');
 const User = require('../models/User');
 const { sequelize } = require('../config/database');
-const { uploadRiskData, deleteFromCloudinary } = require('../middleware/upload'); // Import Cloudinary uploader
-const cloudinary = require('../config/cloudinary'); // Import cloudinary config
+const { uploadRiskData, deleteFromCloudinary } = require('../middleware/upload');
+const cloudinary = require('../config/cloudinary');
 
 const router = express.Router();
 
@@ -17,10 +20,350 @@ router.use(protect);
 router.use(hasRoleLevel('quality_assurance'));
 
 // =======================
+// EXCEL TEMPLATE GENERATOR
+// =======================
+
+const generateRiskTemplate = () => {
+  // Define template columns
+  const templateData = [
+    {
+      'Unit': 'Finance Department',
+      'Risk Category': 'Operational Risk',
+      'Risk Description': 'Example: Inadequate financial controls',
+      'Risk Score (1-5)': 3,
+      'Likelihood (1-5)': 2,
+      'Impact (1-5)': 4,
+      'Mitigation Strategy': 'Implement dual authorization for transactions',
+      'Control Owner': 'CFO',
+      'Target Date': '2024-12-31',
+      'Status': 'Pending'
+    }
+  ];
+
+  // Add instruction row
+  const instructions = [
+    {
+      'Unit': 'INSTRUCTIONS:',
+      'Risk Category': 'Fill in your data below',
+      'Risk Description': 'Delete this row before upload',
+      'Risk Score (1-5)': '1 = Very Low, 5 = Very High',
+      'Likelihood (1-5)': '1 = Rare, 5 = Almost Certain',
+      'Impact (1-5)': '1 = Insignificant, 5 = Catastrophic',
+      'Mitigation Strategy': 'Describe controls',
+      'Control Owner': 'Person responsible',
+      'Target Date': 'YYYY-MM-DD format',
+      'Status': 'Pending/In Progress/Completed'
+    },
+    {}, // Empty row for separation
+    ...templateData
+  ];
+
+  // Create workbook and worksheet
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.json_to_sheet(instructions, { header: [
+    'Unit',
+    'Risk Category',
+    'Risk Description',
+    'Risk Score (1-5)',
+    'Likelihood (1-5)',
+    'Impact (1-5)',
+    'Mitigation Strategy',
+    'Control Owner',
+    'Target Date',
+    'Status'
+  ]});
+
+  // Add column widths for better readability
+  ws['!cols'] = [
+    { wch: 20 }, // Unit
+    { wch: 20 }, // Risk Category
+    { wch: 40 }, // Risk Description
+    { wch: 15 }, // Risk Score
+    { wch: 15 }, // Likelihood
+    { wch: 15 }, // Impact
+    { wch: 30 }, // Mitigation Strategy
+    { wch: 20 }, // Control Owner
+    { wch: 15 }, // Target Date
+    { wch: 15 }  // Status
+  ];
+
+  // Add the worksheet to workbook
+  XLSX.utils.book_append_sheet(wb, ws, 'Risk Assessment Template');
+
+  // Add a second sheet with instructions
+  const instructionSheet = XLSX.utils.aoa_to_sheet([
+    ['RISK ASSESSMENT TEMPLATE INSTRUCTIONS'],
+    [],
+    ['Column', 'Description', 'Valid Values'],
+    ['Unit', 'Department or business unit name', 'Text'],
+    ['Risk Category', 'Category of risk', 'Operational, Financial, Compliance, Strategic'],
+    ['Risk Description', 'Detailed description of the risk', 'Text'],
+    ['Risk Score (1-5)', 'Overall risk score', '1-5 (1=Very Low, 5=Very High)'],
+    ['Likelihood (1-5)', 'Probability of occurrence', '1-5 (1=Rare, 5=Almost Certain)'],
+    ['Impact (1-5)', 'Potential impact if occurs', '1-5 (1=Insignificant, 5=Catastrophic)'],
+    ['Mitigation Strategy', 'Controls or actions to mitigate risk', 'Text'],
+    ['Control Owner', 'Person responsible', 'Name or role'],
+    ['Target Date', 'Date for completion', 'YYYY-MM-DD'],
+    ['Status', 'Current status', 'Pending, In Progress, Completed'],
+    [],
+    ['NOTES:'],
+    ['- Delete the instruction row before uploading'],
+    ['- All fields are required'],
+    ['- Risk Score = Likelihood × Impact (calculated automatically)'],
+    ['- Save file as .xlsx or .xls format']
+  ]);
+
+  XLSX.utils.book_append_sheet(wb, instructionSheet, 'Instructions');
+
+  return wb;
+};
+
+// Helper function to group data
+const groupBy = (data, key) => {
+  return data.reduce((acc, item) => {
+    const group = item[key];
+    if (!acc[group]) acc[group] = [];
+    acc[group].push(item);
+    return acc;
+  }, {});
+};
+
+// =======================
+// TEMPLATE DOWNLOAD ENDPOINT
+// =======================
+
+// @desc    Download Operational Risk Template
+// @route   GET /api/qa/download-risk-template
+// @access  Quality Assurance and above
+router.get('/download-risk-template', (req, res) => {
+  try {
+    // Generate template
+    const wb = generateRiskTemplate();
+    
+    // Write to buffer
+    const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    
+    // Set headers for file download
+    res.setHeader('Content-Disposition', 'attachment; filename=Operational_Risk_Template.xlsx');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Length', buffer.length);
+    
+    // Send file
+    res.send(buffer);
+
+  } catch (error) {
+    console.error('Download template error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generating template'
+    });
+  }
+});
+
+// =======================
+// EXCEL UPLOAD AND VALIDATION ENDPOINT
+// =======================
+
+// @desc    Upload and validate Excel risk data
+// @route   POST /api/qa/upload-risk-excel
+// @access  Quality Assurance and above
+router.post('/upload-risk-excel', uploadRiskData.single('riskFile'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide an Excel file'
+      });
+    }
+
+    const { title, description, department } = req.body;
+    
+    // Get file path from Cloudinary
+    const filePath = req.file.path;
+    
+    // Read and parse Excel file
+    const response = await fetch(filePath);
+    const buffer = await response.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    
+    const firstSheet = workbook.SheetNames[0];
+    const data = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet]);
+
+    // Filter out instruction rows (rows with 'INSTRUCTIONS' in Unit field)
+    const riskData = data.filter(row => 
+      row.Unit && !row.Unit.toString().includes('INSTRUCTIONS') && 
+      !row.Unit.toString().includes('NOTES')
+    );
+
+    // Validate data structure
+    const requiredColumns = [
+      'Unit', 'Risk Category', 'Risk Description', 
+      'Risk Score (1-5)', 'Likelihood (1-5)', 'Impact (1-5)',
+      'Mitigation Strategy', 'Control Owner', 'Target Date', 'Status'
+    ];
+
+    const validationErrors = [];
+    const validData = [];
+
+    riskData.forEach((row, index) => {
+      const rowErrors = [];
+      
+      // Skip empty rows
+      if (!row.Unit && !row['Risk Category']) return;
+
+      // Check required fields
+      requiredColumns.forEach(col => {
+        if (row[col] === undefined || row[col] === null || row[col] === '') {
+          rowErrors.push(`Missing ${col}`);
+        }
+      });
+
+      // Validate risk scores (1-5)
+      const riskScore = parseFloat(row['Risk Score (1-5)']);
+      if (row['Risk Score (1-5)'] && (isNaN(riskScore) || riskScore < 1 || riskScore > 5)) {
+        rowErrors.push('Risk Score must be between 1 and 5');
+      }
+
+      // Validate likelihood (1-5)
+      const likelihood = parseFloat(row['Likelihood (1-5)']);
+      if (row['Likelihood (1-5)'] && (isNaN(likelihood) || likelihood < 1 || likelihood > 5)) {
+        rowErrors.push('Likelihood must be between 1 and 5');
+      }
+
+      // Validate impact (1-5)
+      const impact = parseFloat(row['Impact (1-5)']);
+      if (row['Impact (1-5)'] && (isNaN(impact) || impact < 1 || impact > 5)) {
+        rowErrors.push('Impact must be between 1 and 5');
+      }
+
+      // Validate date format (YYYY-MM-DD)
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (row['Target Date'] && !dateRegex.test(row['Target Date'])) {
+        rowErrors.push('Target Date must be in YYYY-MM-DD format');
+      }
+
+      // Validate status
+      const validStatuses = ['Pending', 'In Progress', 'Completed'];
+      if (row['Status'] && !validStatuses.includes(row['Status'])) {
+        rowErrors.push('Status must be one of: Pending, In Progress, Completed');
+      }
+
+      if (rowErrors.length === 0) {
+        // Calculate risk level
+        const riskScore = parseFloat(row['Risk Score (1-5)']) || 0;
+        const likelihood = parseFloat(row['Likelihood (1-5)']) || 0;
+        const impact = parseFloat(row['Impact (1-5)']) || 0;
+        const calculatedRisk = likelihood * impact;
+
+        validData.push({
+          ...row,
+          rowNumber: index + 2,
+          calculatedRiskScore: calculatedRisk,
+          riskLevel: calculatedRisk >= 15 ? 'High' : calculatedRisk >= 8 ? 'Medium' : 'Low',
+          createdAt: new Date(),
+          createdBy: req.user.id
+        });
+      } else {
+        validationErrors.push({
+          row: index + 2,
+          errors: rowErrors
+        });
+      }
+    });
+
+    // If there are validation errors, return them
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors: validationErrors,
+        summary: {
+          totalRows: riskData.length,
+          validRows: validData.length,
+          errorRows: validationErrors.length
+        }
+      });
+    }
+
+    // Calculate summary statistics
+    const highRisk = validData.filter(d => d.riskLevel === 'High').length;
+    const mediumRisk = validData.filter(d => d.riskLevel === 'Medium').length;
+    const lowRisk = validData.filter(d => d.riskLevel === 'Low').length;
+
+    // Store in database
+    const riskAssessment = await RiskAssessment.create({
+      title: title || 'Excel Risk Upload',
+      description: description || 'Uploaded via Excel template',
+      status: 'pending',
+      riskData: {
+        rows: validData,
+        summary: {
+          totalRisks: validData.length,
+          highRisk,
+          mediumRisk,
+          lowRisk,
+          byUnit: groupBy(validData, 'Unit'),
+          byCategory: groupBy(validData, 'Risk Category'),
+          byStatus: groupBy(validData, 'Status')
+        }
+      },
+      originalFileName: req.file.originalname,
+      fileUrl: req.file.path,
+      fileSize: req.file.size,
+      cloudinaryPublicId: req.file.filename,
+      totalRisks: validData.length,
+      highRiskCount: highRisk,
+      mediumRiskCount: mediumRisk,
+      lowRiskCount: lowRisk,
+      progressPercentage: 0,
+      assessmentDate: new Date(),
+      department: department || 'General',
+      createdBy: req.user.id,
+      metadata: {
+        uploadedBy: req.user.name,
+        uploadDate: new Date(),
+        fileType: req.file.mimetype,
+        rowCount: validData.length,
+        cloudinaryUrl: req.file.path
+      }
+    });
+
+    // Update dashboard metrics
+    await updateDashboardMetrics(req.user.id);
+
+    res.status(201).json({
+      success: true,
+      message: 'Risk data uploaded and validated successfully',
+      data: {
+        id: riskAssessment.id,
+        title: riskAssessment.title,
+        summary: riskAssessment.riskData.summary,
+        fileUrl: riskAssessment.fileUrl,
+        rowCount: validData.length,
+        createdAt: riskAssessment.createdAt
+      }
+    });
+
+  } catch (error) {
+    console.error('Upload Excel error:', error);
+    
+    if (req.file) {
+      await deleteFromCloudinary(req.file.filename).catch(console.warn);
+    }
+    
+    res.status(500).json({
+      success: false,
+      message: 'Error processing Excel file',
+      error: error.message
+    });
+  }
+});
+
+// =======================
 // RISK ASSESSMENT ENDPOINTS
 // =======================
 
-// @desc    Upload risk data to Cloudinary
+// @desc    Upload risk data (JSON/CSV)
 // @route   POST /api/qa/upload-risk-data
 // @access  Quality Assurance and above
 router.post('/upload-risk-data', uploadRiskData.single('riskFile'), async (req, res) => {
@@ -28,7 +371,6 @@ router.post('/upload-risk-data', uploadRiskData.single('riskFile'), async (req, 
     const { title, description, department, assessmentDate, riskData } = req.body;
     const riskFile = req.file;
     
-    // Parse risk data if provided as JSON string
     let parsedRiskData = {};
     if (riskData) {
       try {
@@ -38,34 +380,31 @@ router.post('/upload-risk-data', uploadRiskData.single('riskFile'), async (req, 
       }
     }
 
-    // If file was uploaded to Cloudinary, process it
     if (riskFile) {
       parsedRiskData.fileInfo = {
-        filename: riskFile.filename, // Cloudinary public ID
+        filename: riskFile.filename,
         originalName: riskFile.originalname,
-        url: riskFile.path, // Cloudinary URL
+        url: riskFile.path,
         size: riskFile.size,
         format: riskFile.format,
         resourceType: riskFile.resource_type
       };
     }
 
-    // Calculate risk metrics (simplified - you'd parse actual file content)
     const totalRisks = parsedRiskData.risks?.length || 0;
     const highRiskCount = parsedRiskData.risks?.filter(r => r.severity === 'high').length || 0;
     const mediumRiskCount = parsedRiskData.risks?.filter(r => r.severity === 'medium').length || 0;
     const lowRiskCount = parsedRiskData.risks?.filter(r => r.severity === 'low').length || 0;
 
-    // Create risk assessment with Cloudinary info
     const riskAssessment = await RiskAssessment.create({
       title: title || 'Risk Assessment Upload',
       description,
       status: 'pending',
       riskData: parsedRiskData,
       originalFileName: riskFile?.originalname,
-      fileUrl: riskFile?.path, // Cloudinary URL
+      fileUrl: riskFile?.path,
       fileSize: riskFile?.size,
-      cloudinaryPublicId: riskFile?.filename, // Store public ID for potential deletion
+      cloudinaryPublicId: riskFile?.filename,
       totalRisks,
       highRiskCount,
       mediumRiskCount,
@@ -82,7 +421,6 @@ router.post('/upload-risk-data', uploadRiskData.single('riskFile'), async (req, 
       }
     });
 
-    // Update or create dashboard with new metrics
     await updateDashboardMetrics(req.user.id);
 
     res.status(201).json({
@@ -99,7 +437,6 @@ router.post('/upload-risk-data', uploadRiskData.single('riskFile'), async (req, 
   } catch (error) {
     console.error('Upload risk data error:', error);
     
-    // Clean up Cloudinary file if there was an error
     if (req.file) {
       await deleteFromCloudinary(req.file.filename).catch(console.warn);
     }
@@ -112,46 +449,6 @@ router.post('/upload-risk-data', uploadRiskData.single('riskFile'), async (req, 
   }
 });
 
-// @desc    Delete risk assessment and its file from Cloudinary
-// @route   DELETE /api/qa/risk-assessments/:id
-// @access  Quality Assurance and above
-router.delete('/risk-assessments/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    const riskAssessment = await RiskAssessment.findByPk(id);
-    if (!riskAssessment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Risk assessment not found'
-      });
-    }
-
-    // Delete file from Cloudinary if it exists
-    if (riskAssessment.cloudinaryPublicId) {
-      await deleteFromCloudinary(riskAssessment.cloudinaryPublicId);
-    }
-
-    // Delete the record
-    await riskAssessment.destroy();
-
-    // Update dashboard metrics
-    await updateDashboardMetrics(req.user.id);
-
-    res.json({
-      success: true,
-      message: 'Risk assessment deleted successfully'
-    });
-
-  } catch (error) {
-    console.error('Delete risk assessment error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error deleting risk assessment'
-    });
-  }
-});
-
 // @desc    Get all risk assessments with status counts
 // @route   GET /api/qa/risk-assessments
 // @access  Quality Assurance and above
@@ -159,7 +456,6 @@ router.get('/risk-assessments', async (req, res) => {
   try {
     const { status, department, fromDate, toDate } = req.query;
     
-    // Build filter
     const where = {};
     if (status) where.status = status;
     if (department) where.department = department;
@@ -169,7 +465,6 @@ router.get('/risk-assessments', async (req, res) => {
       if (toDate) where.assessmentDate[Op.lte] = new Date(toDate);
     }
 
-    // Get all risk assessments
     const riskAssessments = await RiskAssessment.findAll({
       where,
       order: [['createdAt', 'DESC']],
@@ -180,7 +475,6 @@ router.get('/risk-assessments', async (req, res) => {
       }]
     });
 
-    // Get status counts for dashboard
     const statusCounts = await RiskAssessment.findAll({
       attributes: [
         'status',
@@ -189,7 +483,6 @@ router.get('/risk-assessments', async (req, res) => {
       group: ['status']
     });
 
-    // Format counts
     const counts = {
       pending: 0,
       in_progress: 0,
@@ -205,7 +498,7 @@ router.get('/risk-assessments', async (req, res) => {
       success: true,
       data: riskAssessments.map(ra => ({
         ...ra.toJSON(),
-        fileUrl: ra.fileUrl, // Cloudinary URL
+        fileUrl: ra.fileUrl,
         cloudinaryPublicId: ra.cloudinaryPublicId
       })),
       summary: {
@@ -242,11 +535,9 @@ router.put('/risk-assessments/:id/status', async (req, res) => {
       });
     }
 
-    // Update status
     riskAssessment.status = status;
     riskAssessment.updatedBy = req.user.id;
 
-    // If completed, set completedAt
     if (status === 'completed') {
       riskAssessment.completedAt = new Date();
       riskAssessment.progressPercentage = 100;
@@ -257,8 +548,6 @@ router.put('/risk-assessments/:id/status', async (req, res) => {
     }
 
     await riskAssessment.save();
-
-    // Update dashboard metrics
     await updateDashboardMetrics(req.user.id);
 
     res.json({
@@ -276,6 +565,42 @@ router.put('/risk-assessments/:id/status', async (req, res) => {
   }
 });
 
+// @desc    Delete risk assessment and its file from Cloudinary
+// @route   DELETE /api/qa/risk-assessments/:id
+// @access  Quality Assurance and above
+router.delete('/risk-assessments/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const riskAssessment = await RiskAssessment.findByPk(id);
+    if (!riskAssessment) {
+      return res.status(404).json({
+        success: false,
+        message: 'Risk assessment not found'
+      });
+    }
+
+    if (riskAssessment.cloudinaryPublicId) {
+      await deleteFromCloudinary(riskAssessment.cloudinaryPublicId);
+    }
+
+    await riskAssessment.destroy();
+    await updateDashboardMetrics(req.user.id);
+
+    res.json({
+      success: true,
+      message: 'Risk assessment deleted successfully'
+    });
+
+  } catch (error) {
+    console.error('Delete risk assessment error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deleting risk assessment'
+    });
+  }
+});
+
 // =======================
 // MONITORING DASHBOARD ENDPOINTS
 // =======================
@@ -285,12 +610,10 @@ router.put('/risk-assessments/:id/status', async (req, res) => {
 // @access  Quality Assurance and above
 router.get('/dashboard', async (req, res) => {
   try {
-    // Get or create dashboard for user
     let dashboard = await MonitoringDashboard.findOne({
       where: { createdBy: req.user.id, dashboardType: 'qa' }
     });
 
-    // Get real-time metrics
     const riskStats = await RiskAssessment.findAll({
       attributes: [
         'status',
@@ -307,7 +630,6 @@ router.get('/dashboard', async (req, res) => {
       group: ['status']
     });
 
-    // Format risk counts
     const riskCounts = {
       pending: 0,
       in_progress: 0,
@@ -319,7 +641,6 @@ router.get('/dashboard', async (req, res) => {
       if (item.status === 'completed') riskCounts.completed = parseInt(item.dataValues.count);
     });
 
-    // Get recent risk assessments
     const recentRisks = await RiskAssessment.findAll({
       limit: 5,
       order: [['createdAt', 'DESC']],
@@ -330,7 +651,6 @@ router.get('/dashboard', async (req, res) => {
       }]
     });
 
-    // Get pending plans to review
     const pendingPlans = await AuditPlan.count({
       where: { status: 'under_review' }
     });
@@ -357,7 +677,7 @@ router.get('/dashboard', async (req, res) => {
         date: r.createdAt,
         user: r.creator?.name,
         userPhoto: r.creator?.profilePhotoUrl,
-        fileUrl: r.fileUrl // Cloudinary URL
+        fileUrl: r.fileUrl
       })),
       charts: {
         riskDistribution: {
@@ -371,6 +691,18 @@ router.get('/dashboard', async (req, res) => {
           description: 'Upload operational risk template',
           endpoint: '/api/qa/upload-risk-data',
           icon: 'upload'
+        },
+        {
+          name: 'Upload Excel Risk Data',
+          description: 'Upload Excel template with validation',
+          endpoint: '/api/qa/upload-risk-excel',
+          icon: 'table'
+        },
+        {
+          name: 'Download Template',
+          description: 'Download Excel risk template',
+          endpoint: '/api/qa/download-risk-template',
+          icon: 'download'
         },
         {
           name: 'Monitoring Dashboard',
@@ -387,7 +719,6 @@ router.get('/dashboard', async (req, res) => {
       ]
     };
 
-    // Update or create dashboard record
     if (dashboard) {
       await dashboard.update({
         metrics: dashboardData,
@@ -434,19 +765,11 @@ router.get('/dashboard', async (req, res) => {
 // ENHANCED DASHBOARD WITH CHARTS
 // =======================
 
-// @desc    Get enhanced QA dashboard data with charts and metrics
-// @route   GET /api/qa/dashboard-data
-// @access  Quality Assurance and above
 router.get('/dashboard-data', async (req, res) => {
   try {
     const currentYear = new Date().getFullYear();
     const priorYear = currentYear - 1;
 
-    // =====================================================
-    // 1. Get audit performance data (Prior Year vs Current Year)
-    // =====================================================
-    
-    // Get current year audits by quarter
     const currentYearAudits = await AuditPlan.findAll({
       where: sequelize.where(
         sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
@@ -460,7 +783,6 @@ router.get('/dashboard-data', async (req, res) => {
       raw: true
     });
 
-    // Get prior year audits by quarter
     const priorYearAudits = await AuditPlan.findAll({
       where: sequelize.where(
         sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
@@ -474,7 +796,6 @@ router.get('/dashboard-data', async (req, res) => {
       raw: true
     });
 
-    // Format audit performance data for charts
     const auditPerformance = {
       currentYear: {
         year: currentYear,
@@ -486,67 +807,50 @@ router.get('/dashboard-data', async (req, res) => {
       }
     };
 
-    // Populate current year data
     currentYearAudits.forEach(item => {
       const quarterNum = Math.floor(parseFloat(item.quarter));
       const quarterKey = `Q${quarterNum}`;
       auditPerformance.currentYear.quarters[quarterKey] = parseInt(item.count) || 0;
     });
 
-    // Populate prior year data
     priorYearAudits.forEach(item => {
       const quarterNum = Math.floor(parseFloat(item.quarter));
       const quarterKey = `Q${quarterNum}`;
       auditPerformance.priorYear.quarters[quarterKey] = parseInt(item.count) || 0;
     });
 
-    // =====================================================
-    // 2. Calculate quarterly variance trend
-    // =====================================================
-    
     const quarterlyVariance = {
       quarters: ['Q1', 'Q2', 'Q3', 'Q4'],
       variance: [],
       percentChange: []
     };
 
-    // Calculate variance (Current Year - Prior Year) for each quarter
     ['Q1', 'Q2', 'Q3', 'Q4'].forEach(quarter => {
       const current = auditPerformance.currentYear.quarters[quarter];
       const prior = auditPerformance.priorYear.quarters[quarter];
       const variance = current - prior;
       quarterlyVariance.variance.push(variance);
       
-      // Calculate percentage change (avoid division by zero)
       const percentChange = prior === 0 ? (variance * 100) : Math.round((variance / prior) * 100);
       quarterlyVariance.percentChange.push(percentChange);
     });
 
-    // =====================================================
-    // 3. Get metrics for available actions
-    // =====================================================
-    
-    // Count pending plans to review
     const pendingPlansCount = await AuditPlan.count({
       where: { status: 'under_review' }
     });
 
-    // Count plans ready for consolidation
     const readyForConsolidation = await AuditPlan.count({
       where: { status: 'approved' }
     });
 
-    // Count pending approvals
     const pendingApprovals = await AuditPlan.count({
       where: { status: 'pending_approval' }
     });
 
-    // Count reports ready for review
     const reportsToReview = await AuditPlan.count({
       where: { status: 'ready_for_review' }
     });
 
-    // Get audit history summary
     const auditHistory = await AuditPlan.findAll({
       attributes: [
         'status',
@@ -555,7 +859,6 @@ router.get('/dashboard-data', async (req, res) => {
       group: ['status']
     });
 
-    // Format history data
     const historySummary = {};
     let totalAudits = 0;
     auditHistory.forEach(item => {
@@ -564,28 +867,21 @@ router.get('/dashboard-data', async (req, res) => {
       totalAudits += count;
     });
 
-    // Get recent risk assessments count (last 30 days)
     const recentRiskAssessments = await RiskAssessment.count({
       where: {
         createdAt: {
-          [Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days
+          [Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
         }
       }
     });
 
-    // Get total files stored in Cloudinary
     const totalRiskFiles = await RiskAssessment.count({
       where: {
         cloudinaryPublicId: { [Op.ne]: null }
       }
     });
 
-    // =====================================================
-    // 4. Compile complete dashboard data
-    // =====================================================
-    
     const dashboardData = {
-      // Chart data for frontend
       charts: {
         auditPerformance: {
           title: 'Audit Performance Comparison',
@@ -600,14 +896,24 @@ router.get('/dashboard-data', async (req, res) => {
           chartType: 'line'
         }
       },
-      
-      // Available actions with counts
       actions: {
-        uploadRiskData: {
-          name: 'Upload Risk Data',
-          description: 'Upload operational risk template',
+        downloadTemplate: {
+          name: 'Download Excel Template',
+          description: 'Download operational risk template',
+          icon: 'download',
+          route: '/api/qa/download-risk-template'
+        },
+        uploadExcel: {
+          name: 'Upload Excel Risk Data',
+          description: 'Upload and validate Excel file',
           icon: 'upload',
           count: recentRiskAssessments,
+          route: '/api/qa/upload-risk-excel'
+        },
+        uploadRiskData: {
+          name: 'Upload Risk Data',
+          description: 'Upload JSON/CSV risk data',
+          icon: 'code',
           route: '/api/qa/upload-risk-data'
         },
         monitoringDashboard: {
@@ -624,8 +930,6 @@ router.get('/dashboard-data', async (req, res) => {
           route: '/api/qa/consolidate-plans'
         }
       },
-      
-      // Metrics cards
       metrics: {
         pendingApprovals: {
           label: 'APM Approvals',
@@ -654,8 +958,6 @@ router.get('/dashboard-data', async (req, res) => {
           icon: 'cloud'
         }
       },
-      
-      // Summary stats
       summary: {
         totalAudits,
         pendingReviews: pendingPlansCount,
@@ -699,7 +1001,17 @@ router.get('/audit-plans', async (req, res) => {
       include: [
         {
           model: User,
-          as: 'teamLead',
+          as: 'creator',           // This matches 'createdAuditPlans' in User model
+          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+        },
+        {
+          model: User,
+          as: 'teamLead',           // This matches 'ledAuditPlans' in User model
+          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+        },
+        {
+          model: User,
+          as: 'approver',           // This matches 'approvedAuditPlans' in User model
           attributes: ['id', 'name', 'email', 'profilePhotoUrl']
         },
         {
@@ -729,7 +1041,8 @@ router.get('/audit-plans', async (req, res) => {
     console.error('Get audit plans error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching audit plans'
+      message: 'Error fetching audit plans',
+      error: error.message
     });
   }
 });
@@ -748,7 +1061,6 @@ router.post('/consolidate-plans', async (req, res) => {
       });
     }
 
-    // Get all plans to consolidate
     const plans = await AuditPlan.findAll({
       where: {
         id: planIds
@@ -767,10 +1079,8 @@ router.post('/consolidate-plans', async (req, res) => {
       });
     }
 
-    // Generate consolidated plan number
     const planNumber = 'CON-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
 
-    // Combine audit areas from all plans
     const allAuditAreas = [];
     const attachedFiles = [];
     
@@ -778,7 +1088,6 @@ router.post('/consolidate-plans', async (req, res) => {
       if (plan.auditAreas && Array.isArray(plan.auditAreas)) {
         allAuditAreas.push(...plan.auditAreas);
       }
-      // Collect Cloudinary file info
       if (plan.riskAssessment?.fileUrl) {
         attachedFiles.push({
           planId: plan.id,
@@ -789,7 +1098,6 @@ router.post('/consolidate-plans', async (req, res) => {
       }
     });
 
-    // Create consolidated plan
     const consolidatedPlan = await AuditPlan.create({
       planNumber,
       title: consolidatedTitle || `Consolidated Audit Plan - ${new Date().toLocaleDateString()}`,
@@ -812,7 +1120,6 @@ router.post('/consolidate-plans', async (req, res) => {
       }
     });
 
-    // Update original plans to mark as consolidated
     await AuditPlan.update(
       { 
         status: 'consolidated',
@@ -825,7 +1132,6 @@ router.post('/consolidate-plans', async (req, res) => {
       { where: { id: planIds } }
     );
 
-    // Update dashboard metrics
     await updateDashboardMetrics(req.user.id);
 
     res.status(201).json({
@@ -851,7 +1157,6 @@ router.post('/consolidate-plans', async (req, res) => {
 // @access  Quality Assurance and above
 router.get('/download-template', (req, res) => {
   try {
-    // Create a simple template structure
     const template = {
       version: '1.0',
       templateType: 'operational_risk_data',
@@ -863,7 +1168,7 @@ router.get('/download-template', (req, res) => {
             id: 'RISK-001',
             title: 'Example Risk',
             description: 'Risk description',
-            severity: 'high', // high, medium, low
+            severity: 'high',
             likelihood: 'probable',
             impact: 'major',
             department: 'Finance',
@@ -928,7 +1233,6 @@ async function updateDashboardMetrics(userId) {
         if (item.status === 'completed') counts.completed = parseInt(item.dataValues.count);
       });
 
-      // Get Cloudinary file count
       const cloudinaryFiles = await RiskAssessment.count({
         where: {
           cloudinaryPublicId: { [Op.ne]: null }
