@@ -33,6 +33,18 @@ const AuditPlan = sequelize.define('AuditPlan', {
     type: DataTypes.ENUM('draft', 'under_review', 'approved', 'consolidated', 'implemented'),
     defaultValue: 'draft'
   },
+  // NEW: Department field for filtering
+  department: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'Department associated with this audit plan',
+    validate: {
+      len: {
+        args: [0, 100],
+        msg: 'Department must be less than 100 characters'
+      }
+    }
+  },
   // Planning details
   auditPeriod: {
     type: DataTypes.STRING,
@@ -136,12 +148,16 @@ const AuditPlan = sequelize.define('AuditPlan', {
     },
     {
       fields: ['teamLeadId']
+    },
+    // NEW: Add index for department for better performance
+    {
+      fields: ['department']
     }
   ]
 });
 
 // =======================
-// ASSOCIATIONS - ADD THIS SECTION
+// ASSOCIATIONS
 // =======================
 AuditPlan.associate = (models) => {
   // An audit plan belongs to the user who created it
@@ -188,7 +204,7 @@ AuditPlan.associate = (models) => {
   AuditPlan.hasMany(AuditPlan, {
     foreignKey: 'consolidatedFrom',
     as: 'sourcePlans',
-    constraints: false // This is a self-reference, needs special handling
+    constraints: false
   });
 
   // An audit plan can be the source for consolidated plans
