@@ -24,56 +24,21 @@ router.use(hasRoleLevel('quality_assurance'));
 // =======================
 
 const generateRiskTemplate = () => {
-  // Define template columns
-  const templateData = [
-    {
-      'Unit': 'Finance Department',
-      'Risk Category': 'Operational Risk',
-      'Risk Description': 'Example: Inadequate financial controls',
-      'Risk Score (1-5)': 3,
-      'Likelihood (1-5)': 2,
-      'Impact (1-5)': 4,
-      'Mitigation Strategy': 'Implement dual authorization for transactions',
-      'Control Owner': 'CFO',
-      'Target Date': '2024-12-31',
-      'Status': 'Pending'
-    }
-  ];
-
-  // Add instruction row
-  const instructions = [
-    {
-      'Unit': 'INSTRUCTIONS:',
-      'Risk Category': 'Fill in your data below',
-      'Risk Description': 'Delete this row before upload',
-      'Risk Score (1-5)': '1 = Very Low, 5 = Very High',
-      'Likelihood (1-5)': '1 = Rare, 5 = Almost Certain',
-      'Impact (1-5)': '1 = Insignificant, 5 = Catastrophic',
-      'Mitigation Strategy': 'Describe controls',
-      'Control Owner': 'Person responsible',
-      'Target Date': 'YYYY-MM-DD format',
-      'Status': 'Pending/In Progress/Completed'
-    },
-    {}, // Empty row for separation
-    ...templateData
-  ];
-
-  // Create workbook and worksheet
+  // Create workbook
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(instructions, { header: [
-    'Unit',
-    'Risk Category',
-    'Risk Description',
-    'Risk Score (1-5)',
-    'Likelihood (1-5)',
-    'Impact (1-5)',
-    'Mitigation Strategy',
-    'Control Owner',
-    'Target Date',
-    'Status'
-  ]});
+  
+  // Create template data
+  const templateData = [
+    ['Unit', 'Risk Category', 'Risk Description', 'Risk Score (1-5)', 'Likelihood (1-5)', 'Impact (1-5)', 'Mitigation Strategy', 'Control Owner', 'Target Date', 'Status'],
+    ['Finance Department', 'Operational Risk', 'Example: Inadequate financial controls', 3, 2, 4, 'Implement dual authorization for transactions', 'CFO', '2024-12-31', 'Pending'],
+    ['IT Department', 'Cyber Security', 'Example: Data breach risk', 4, 3, 5, 'Implement MFA and monitoring', 'CTO', '2024-11-30', 'In Progress'],
+    ['HR Department', 'Compliance', 'Example: Policy violation', 2, 2, 3, 'Update employee handbook', 'HR Director', '2024-10-15', 'Completed']
+  ];
 
-  // Add column widths for better readability
+  // Convert to worksheet
+  const ws = XLSX.utils.aoa_to_sheet(templateData);
+
+  // Add column widths
   ws['!cols'] = [
     { wch: 20 }, // Unit
     { wch: 20 }, // Risk Category
@@ -87,33 +52,35 @@ const generateRiskTemplate = () => {
     { wch: 15 }  // Status
   ];
 
-  // Add the worksheet to workbook
+  // Add worksheet to workbook
   XLSX.utils.book_append_sheet(wb, ws, 'Risk Assessment Template');
 
-  // Add a second sheet with instructions
-  const instructionSheet = XLSX.utils.aoa_to_sheet([
+  // Add instructions sheet
+  const instructionsData = [
     ['RISK ASSESSMENT TEMPLATE INSTRUCTIONS'],
     [],
-    ['Column', 'Description', 'Valid Values'],
-    ['Unit', 'Department or business unit name', 'Text'],
-    ['Risk Category', 'Category of risk', 'Operational, Financial, Compliance, Strategic'],
-    ['Risk Description', 'Detailed description of the risk', 'Text'],
-    ['Risk Score (1-5)', 'Overall risk score', '1-5 (1=Very Low, 5=Very High)'],
-    ['Likelihood (1-5)', 'Probability of occurrence', '1-5 (1=Rare, 5=Almost Certain)'],
-    ['Impact (1-5)', 'Potential impact if occurs', '1-5 (1=Insignificant, 5=Catastrophic)'],
-    ['Mitigation Strategy', 'Controls or actions to mitigate risk', 'Text'],
-    ['Control Owner', 'Person responsible', 'Name or role'],
-    ['Target Date', 'Date for completion', 'YYYY-MM-DD'],
+    ['Column', 'Description', 'Valid Values / Format'],
+    ['Unit', 'Department or business unit name', 'Text (e.g., Finance, IT, HR)'],
+    ['Risk Category', 'Category of risk', 'Operational, Financial, Compliance, Strategic, Cyber Security'],
+    ['Risk Description', 'Detailed description of the risk', 'Text - be specific'],
+    ['Risk Score (1-5)', 'Overall risk score', '1 (Very Low) to 5 (Very High)'],
+    ['Likelihood (1-5)', 'Probability of occurrence', '1 (Rare) to 5 (Almost Certain)'],
+    ['Impact (1-5)', 'Potential impact if occurs', '1 (Insignificant) to 5 (Catastrophic)'],
+    ['Mitigation Strategy', 'Controls or actions to mitigate risk', 'Text - describe controls'],
+    ['Control Owner', 'Person responsible', 'Name or role title'],
+    ['Target Date', 'Date for completion', 'YYYY-MM-DD format (e.g., 2024-12-31)'],
     ['Status', 'Current status', 'Pending, In Progress, Completed'],
     [],
     ['NOTES:'],
-    ['- Delete the instruction row before uploading'],
-    ['- All fields are required'],
-    ['- Risk Score = Likelihood × Impact (calculated automatically)'],
-    ['- Save file as .xlsx or .xls format']
-  ]);
+    ['• All fields are required'],
+    ['• Risk Score = Likelihood × Impact (calculated automatically)'],
+    ['• Save file as .xlsx or .xls format before uploading'],
+    ['• Maximum file size: 10MB']
+  ];
 
-  XLSX.utils.book_append_sheet(wb, instructionSheet, 'Instructions');
+  const instructionsWs = XLSX.utils.aoa_to_sheet(instructionsData);
+  instructionsWs['!cols'] = [{ wch: 25 }, { wch: 40 }, { wch: 40 }];
+  XLSX.utils.book_append_sheet(wb, instructionsWs, 'Instructions');
 
   return wb;
 };
@@ -129,10 +96,10 @@ const groupBy = (data, key) => {
 };
 
 // =======================
-// TEMPLATE DOWNLOAD ENDPOINT
+// TEMPLATE DOWNLOAD ENDPOINT (UPDATED)
 // =======================
 
-// @desc    Download Operational Risk Template
+// @desc    Download Operational Risk Template (Excel)
 // @route   GET /api/qa/download-risk-template
 // @access  Quality Assurance and above
 router.get('/download-risk-template', (req, res) => {
@@ -143,12 +110,13 @@ router.get('/download-risk-template', (req, res) => {
     // Write to buffer
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     
-    // Set headers for file download
+    // Set headers for Excel file download
     res.setHeader('Content-Disposition', 'attachment; filename=Operational_Risk_Template.xlsx');
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Length', buffer.length);
+    res.setHeader('Cache-Control', 'no-cache');
     
-    // Send file
+    // Send the file
     res.send(buffer);
 
   } catch (error) {
@@ -998,28 +966,28 @@ router.get('/audit-plans', async (req, res) => {
     const plans = await AuditPlan.findAll({
       where,
       order: [['createdAt', 'DESC']],
-     // include: [
-     //   {
-     //     model: User,
-     //     as: 'creator',           // This matches 'createdAuditPlans' in User model
-     //     attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-     //   },
-     //   {
-     //     model: User,
-     //     as: 'teamLead',           // This matches 'ledAuditPlans' in User model
-     //     attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-     //   },
-     //   {
-     //     model: User,
-     //     as: 'approver',           // This matches 'approvedAuditPlans' in User model
-     //     attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-     //   },
-     //   {
-     //     model: RiskAssessment,
-     //     as: 'riskAssessment',
-     //     attributes: ['id', 'title', 'status', 'fileUrl', 'cloudinaryPublicId']
-     //   }
-  //    ]
+      include: [
+        {
+          model: User,
+          as: 'creator',
+          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+        },
+        {
+          model: User,
+          as: 'teamLead',
+          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+        },
+        {
+          model: User,
+          as: 'approver',
+          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+        },
+        {
+          model: RiskAssessment,
+          as: 'riskAssessment',
+          attributes: ['id', 'title', 'status', 'fileUrl', 'cloudinaryPublicId']
+        }
+      ]
     });
 
     // Count plans pending review
@@ -1152,57 +1120,12 @@ router.post('/consolidate-plans', async (req, res) => {
   }
 });
 
-// @desc    Download risk data template
+// @desc    Download risk data template (JSON format) - DEPRECATED
 // @route   GET /api/qa/download-template
 // @access  Quality Assurance and above
 router.get('/download-template', (req, res) => {
-  try {
-    const template = {
-      version: '1.0',
-      templateType: 'operational_risk_data',
-      instructions: 'Fill in your risk data following this structure',
-      storage: 'Files will be uploaded to Cloudinary',
-      example: {
-        risks: [
-          {
-            id: 'RISK-001',
-            title: 'Example Risk',
-            description: 'Risk description',
-            severity: 'high',
-            likelihood: 'probable',
-            impact: 'major',
-            department: 'Finance',
-            identifiedBy: 'John Doe',
-            identifiedDate: '2024-01-15',
-            mitigation: 'Mitigation plan here'
-          }
-        ]
-      },
-      fields: [
-        'id',
-        'title',
-        'description',
-        'severity',
-        'likelihood',
-        'impact',
-        'department',
-        'identifiedBy',
-        'identifiedDate',
-        'mitigation'
-      ]
-    };
-
-    res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', 'attachment; filename=risk-data-template.json');
-    res.send(JSON.stringify(template, null, 2));
-
-  } catch (error) {
-    console.error('Download template error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error downloading template'
-    });
-  }
+  // Redirect to the new Excel template endpoint
+  res.redirect('/api/qa/download-risk-template');
 });
 
 // Helper function to update dashboard metrics
