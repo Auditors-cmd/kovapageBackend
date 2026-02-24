@@ -473,6 +473,64 @@ Complete audit management system with 8 specialized user roles, OTP and password
         }
       },
 
+      // NEW: Excel Upload Request Schema
+      ExcelUploadRequest: {
+        type: 'object',
+        properties: {
+          title: {
+            type: 'string',
+            description: 'Title for this risk assessment',
+            example: 'Q1 Risk Assessment'
+          },
+          description: {
+            type: 'string',
+            description: 'Description of the assessment',
+            example: 'Quarterly operational risk assessment'
+          },
+          department: {
+            type: 'string',
+            description: 'Department being assessed',
+            example: 'Finance'
+          },
+          riskFile: {
+            type: 'string',
+            format: 'binary',
+            description: 'Excel file (.xlsx or .xls) containing risk data'
+          }
+        }
+      },
+
+      // NEW: Excel Upload Response Schema
+      ExcelUploadResponse: {
+        type: 'object',
+        properties: {
+          success: { type: 'boolean', example: true },
+          message: { type: 'string' },
+          data: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', format: 'uuid' },
+              title: { type: 'string' },
+              summary: {
+                type: 'object',
+                properties: {
+                  totalRisks: { type: 'integer' },
+                  highRisk: { type: 'integer' },
+                  mediumRisk: { type: 'integer' },
+                  lowRisk: { type: 'integer' },
+                  byUnit: { type: 'object' },
+                  byCategory: { type: 'object' },
+                  byStatus: { type: 'object' }
+                }
+              },
+              fileUrl: { type: 'string' },
+              rowCount: { type: 'integer' },
+              createdAt: { type: 'string', format: 'date-time' }
+            }
+          }
+        }
+      },
+
       RiskAssessmentResponse: {
         type: 'object',
         properties: {
@@ -1659,6 +1717,73 @@ Complete audit management system with 8 specialized user roles, OTP and password
             }
           },
           '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    // NEW: Excel Upload Endpoint
+    '/api/qa/upload-risk-excel': {
+      post: {
+        summary: 'Upload and Validate Excel Risk Data',
+        description: 'Upload an Excel file with risk data. Validates format, calculates risk levels (High/Medium/Low), and stores in database with detailed summaries.',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'multipart/form-data': {
+              schema: {
+                $ref: '#/components/schemas/ExcelUploadRequest'
+              }
+            }
+          }
+        },
+        responses: {
+          '201': {
+            description: 'Excel file processed and validated successfully',
+            content: {
+              'application/json': {
+                schema: {
+                  $ref: '#/components/schemas/ExcelUploadResponse'
+                }
+              }
+            }
+          },
+          '400': {
+            description: 'Validation failed - check error details for specific rows',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: false },
+                    message: { type: 'string', example: 'Validation failed' },
+                    errors: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          row: { type: 'integer' },
+                          errors: { type: 'array', items: { type: 'string' } }
+                        }
+                      }
+                    },
+                    summary: {
+                      type: 'object',
+                      properties: {
+                        totalRows: { type: 'integer' },
+                        validRows: { type: 'integer' },
+                        errorRows: { type: 'integer' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
           '401': { $ref: '#/components/responses/Unauthorized' },
           '403': { $ref: '#/components/responses/Forbidden' },
           '500': { $ref: '#/components/responses/ServerError' }
