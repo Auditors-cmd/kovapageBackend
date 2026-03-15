@@ -729,40 +729,16 @@ router.get('/dashboard', async (req, res) => {
 });
 
 
-// ENHANCED DASHBOARD WITH CHARTS
-
+// =======================
+// ENHANCED DASHBOARD WITH CHARTS - FIXED VERSION
+// =======================
 
 router.get('/dashboard-data', async (req, res) => {
   try {
     const currentYear = new Date().getFullYear();
     const priorYear = currentYear - 1;
 
-    const currentYearAudits = await AuditPlan.findAll({
-      where: sequelize.where(
-        sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
-        currentYear
-      ),
-      attributes: [
-        [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"')), 'quarter'],
-        [sequelize.fn('COUNT', sequelize.col('id')), 'count']
-      ],
-      group: [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"'))],
-      raw: true
-    });
-
-    const priorYearAudits = await AuditPlan.findAll({
-      where: sequelize.where(
-        sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
-        priorYear
-      ),
-      attributes: [
-        [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"')), 'quarter'],
-        [sequelize.fn('COUNT', sequelize.col('id')), 'count']
-      ],
-      group: [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"'))],
-      raw: true
-    });
-
+    // Initialize with default values
     const auditPerformance = {
       currentYear: {
         year: currentYear,
@@ -774,18 +750,59 @@ router.get('/dashboard-data', async (req, res) => {
       }
     };
 
-    currentYearAudits.forEach(item => {
-      const quarterNum = Math.floor(parseFloat(item.quarter));
-      const quarterKey = `Q${quarterNum}`;
-      auditPerformance.currentYear.quarters[quarterKey] = parseInt(item.count) || 0;
-    });
+    // Safely get current year audits
+    try {
+      const currentYearAudits = await AuditPlan.findAll({
+        where: sequelize.where(
+          sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+          currentYear
+        ),
+        attributes: [
+          [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"')), 'quarter'],
+          [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+        ],
+        group: [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"'))],
+        raw: true
+      });
 
-    priorYearAudits.forEach(item => {
-      const quarterNum = Math.floor(parseFloat(item.quarter));
-      const quarterKey = `Q${quarterNum}`;
-      auditPerformance.priorYear.quarters[quarterKey] = parseInt(item.count) || 0;
-    });
+      currentYearAudits.forEach(item => {
+        const quarterNum = Math.floor(parseFloat(item.quarter));
+        if (quarterNum >= 1 && quarterNum <= 4) {
+          const quarterKey = `Q${quarterNum}`;
+          auditPerformance.currentYear.quarters[quarterKey] = parseInt(item.count) || 0;
+        }
+      });
+    } catch (err) {
+      console.log('Error fetching current year audits:', err.message);
+    }
 
+    // Safely get prior year audits
+    try {
+      const priorYearAudits = await AuditPlan.findAll({
+        where: sequelize.where(
+          sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+          priorYear
+        ),
+        attributes: [
+          [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"')), 'quarter'],
+          [sequelize.fn('COUNT', sequelize.col('id')), 'count']
+        ],
+        group: [sequelize.fn('EXTRACT', sequelize.literal('QUARTER FROM "createdAt"'))],
+        raw: true
+      });
+
+      priorYearAudits.forEach(item => {
+        const quarterNum = Math.floor(parseFloat(item.quarter));
+        if (quarterNum >= 1 && quarterNum <= 4) {
+          const quarterKey = `Q${quarterNum}`;
+          auditPerformance.priorYear.quarters[quarterKey] = parseInt(item.count) || 0;
+        }
+      });
+    } catch (err) {
+      console.log('Error fetching prior year audits:', err.message);
+    }
+
+    // Calculate quarterly variance safely
     const quarterlyVariance = {
       quarters: ['Q1', 'Q2', 'Q3', 'Q4'],
       variance: [],
@@ -793,60 +810,96 @@ router.get('/dashboard-data', async (req, res) => {
     };
 
     ['Q1', 'Q2', 'Q3', 'Q4'].forEach(quarter => {
-      const current = auditPerformance.currentYear.quarters[quarter];
-      const prior = auditPerformance.priorYear.quarters[quarter];
+      const current = auditPerformance.currentYear.quarters[quarter] || 0;
+      const prior = auditPerformance.priorYear.quarters[quarter] || 0;
       const variance = current - prior;
+      
       quarterlyVariance.variance.push(variance);
       
-      const percentChange = prior === 0 ? (variance * 100) : Math.round((variance / prior) * 100);
-      quarterlyVariance.percentChange.push(percentChange);
+      // Safe percent change calculation
+      if (prior === 0) {
+        quarterlyVariance.percentChange.push(variance > 0 ? 100 : 0);
+      } else {
+        quarterlyVariance.percentChange.push(Math.round((variance / prior) * 100));
+      }
     });
 
-    const pendingPlansCount = await AuditPlan.count({
-      where: { status: 'under_review' }
-    });
-
-    const readyForConsolidation = await AuditPlan.count({
-      where: { status: 'approved' }
-    });
-
-    const pendingApprovals = await AuditPlan.count({
-      where: { status: 'pending_approval' }
-    });
-
-    const reportsToReview = await AuditPlan.count({
-      where: { status: 'ready_for_review' }
-    });
-
-    const auditHistory = await AuditPlan.findAll({
-      attributes: [
-        'status',
-        [sequelize.fn('COUNT', sequelize.col('status')), 'count']
-      ],
-      group: ['status']
-    });
-
-    const historySummary = {};
+    // Get metrics with error handling
+    let pendingPlansCount = 0;
+    let readyForConsolidation = 0;
+    let pendingApprovals = 0;
+    let reportsToReview = 0;
     let totalAudits = 0;
-    auditHistory.forEach(item => {
-      const count = parseInt(item.dataValues.count);
-      historySummary[item.status] = count;
-      totalAudits += count;
-    });
+    const historySummary = {};
 
-    const recentRiskAssessments = await RiskAssessment.count({
-      where: {
-        createdAt: {
-          [Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    try {
+      pendingPlansCount = await AuditPlan.count({ where: { status: 'under_review' } }) || 0;
+    } catch (err) {
+      console.log('Error counting pending plans:', err.message);
+    }
+
+    try {
+      readyForConsolidation = await AuditPlan.count({ where: { status: 'approved' } }) || 0;
+    } catch (err) {
+      console.log('Error counting ready plans:', err.message);
+    }
+
+    try {
+      pendingApprovals = await AuditPlan.count({ where: { status: 'pending_approval' } }) || 0;
+    } catch (err) {
+      console.log('Error counting pending approvals:', err.message);
+    }
+
+    try {
+      reportsToReview = await AuditPlan.count({ where: { status: 'ready_for_review' } }) || 0;
+    } catch (err) {
+      console.log('Error counting reports to review:', err.message);
+    }
+
+    try {
+      const auditHistory = await AuditPlan.findAll({
+        attributes: [
+          'status',
+          [sequelize.fn('COUNT', sequelize.col('status')), 'count']
+        ],
+        group: ['status']
+      });
+
+      auditHistory.forEach(item => {
+        const count = parseInt(item.dataValues.count) || 0;
+        historySummary[item.status] = count;
+        totalAudits += count;
+      });
+    } catch (err) {
+      console.log('Error fetching audit history:', err.message);
+    }
+
+    let recentRiskAssessments = 0;
+    let totalRiskFiles = 0;
+
+    try {
+      recentRiskAssessments = await RiskAssessment.count({
+        where: {
+          createdAt: {
+            [Op.gte]: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+          }
         }
-      }
-    });
+      }) || 0;
+    } catch (err) {
+      console.log('Error counting recent risk assessments:', err.message);
+    }
 
-    const totalRiskFiles = await RiskAssessment.count({
-      where: {
-        cloudinaryPublicId: { [Op.ne]: null }
-      }
-    });
+    try {
+      totalRiskFiles = await RiskAssessment.count({
+        where: {
+          cloudinaryPublicId: { [Op.ne]: null }
+        }
+      }) || 0;
+    } catch (err) {
+      console.log('Error counting cloudinary files:', err.message);
+    }
+
+    const completedThisYear = Object.values(auditPerformance.currentYear.quarters).reduce((a, b) => a + b, 0);
 
     const dashboardData = {
       charts: {
@@ -928,7 +981,7 @@ router.get('/dashboard-data', async (req, res) => {
       summary: {
         totalAudits,
         pendingReviews: pendingPlansCount,
-        completedThisYear: Object.values(auditPerformance.currentYear.quarters).reduce((a, b) => a + b, 0),
+        completedThisYear,
         totalCloudinaryFiles: totalRiskFiles
       }
     };
@@ -942,7 +995,8 @@ router.get('/dashboard-data', async (req, res) => {
     console.error('Enhanced dashboard data error:', error);
     res.status(500).json({
       success: false,
-      message: 'Error fetching enhanced dashboard data'
+      message: 'Error fetching enhanced dashboard data',
+      error: error.message
     });
   }
 });
