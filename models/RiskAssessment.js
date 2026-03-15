@@ -42,6 +42,12 @@ const RiskAssessment = sequelize.define('RiskAssessment', {
     allowNull: true,
     comment: 'URL to uploaded file (if stored in cloud storage)'
   },
+  // 🔥 FIX: Add this missing field!
+  cloudinaryPublicId: {
+    type: DataTypes.STRING,
+    allowNull: true,
+    comment: 'Cloudinary public ID for the uploaded file'
+  },
   fileSize: {
     type: DataTypes.INTEGER,
     allowNull: true,
@@ -131,5 +137,18 @@ const RiskAssessment = sequelize.define('RiskAssessment', {
   //  }
   ]
 });
+
+// Add associations if needed
+RiskAssessment.associate = (models) => {
+  RiskAssessment.belongsTo(models.User, {
+    foreignKey: 'createdBy',
+    as: 'creator'
+  });
+  
+  RiskAssessment.belongsTo(models.User, {
+    foreignKey: 'updatedBy',
+    as: 'updater'
+  });
+};
 
 module.exports = RiskAssessment;

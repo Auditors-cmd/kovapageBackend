@@ -19,9 +19,8 @@ const router = express.Router();
 router.use(protect);
 router.use(hasRoleLevel('quality_assurance'));
 
-// =======================
+
 // EXCEL TEMPLATE GENERATOR
-// =======================
 
 const generateRiskTemplate = () => {
   // Create workbook
@@ -95,9 +94,9 @@ const groupBy = (data, key) => {
   }, {});
 };
 
-// =======================
+
 // TEMPLATE DOWNLOAD ENDPOINT (UPDATED)
-// =======================
+
 
 // @desc    Download Operational Risk Template (Excel)
 // @route   GET /api/qa/download-risk-template
@@ -128,9 +127,9 @@ router.get('/download-risk-template', (req, res) => {
   }
 });
 
-// =======================
+
 // EXCEL UPLOAD AND VALIDATION ENDPOINT
-// =======================
+
 
 // @desc    Upload and validate Excel risk data
 // @route   POST /api/qa/upload-risk-excel
@@ -729,9 +728,9 @@ router.get('/dashboard', async (req, res) => {
   }
 });
 
-// =======================
+
 // ENHANCED DASHBOARD WITH CHARTS
-// =======================
+
 
 router.get('/dashboard-data', async (req, res) => {
   try {
@@ -948,9 +947,9 @@ router.get('/dashboard-data', async (req, res) => {
   }
 });
 
-// =======================
+
 // AUDIT PLAN CONSOLIDATION
-// =======================
+
 
 // @desc    Get all audit plans for consolidation
 // @route   GET /api/qa/audit-plans
@@ -1124,11 +1123,11 @@ router.post('/consolidate-plans', async (req, res) => {
 // @route   GET /api/qa/download-template
 // @access  Quality Assurance and above
 router.get('/download-template', (req, res) => {
-  // Redirect to the new Excel template endpoint
+  // Redirect to the new Excel template endpoint;
   res.redirect('/api/qa/download-risk-template');
 });
 
-// Helper function to update dashboard metrics
+// Helper function to update dashboard metrics;
 async function updateDashboardMetrics(userId) {
   try {
     const dashboard = await MonitoringDashboard.findOne({

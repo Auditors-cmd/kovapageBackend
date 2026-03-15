@@ -1033,9 +1033,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
     }
   },
   paths: {
-    // =======================
+
     // HEALTH & TEST ENDPOINTS
-    // =======================
+  
     '/api/health': {
       get: {
         summary: 'Health Check',
@@ -1229,9 +1229,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
-    // =======================
+    
     // ROLE MANAGEMENT
-    // =======================
+  
     '/api/auth/update-role': {
       put: {
         summary: 'Update User Role',
@@ -1526,9 +1526,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
-    // =======================
+    
     // PASSWORD RESET
-    // =======================
+
     '/api/auth/forgot-password': {
       post: {
         summary: 'Forgot Password',
@@ -1614,9 +1614,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
-    // =======================
+    
     // USER MANAGEMENT
-    // =======================
+    
     '/api/auth/profile': {
       get: {
         summary: 'Get User Profile',

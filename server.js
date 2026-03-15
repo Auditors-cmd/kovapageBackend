@@ -8,14 +8,14 @@ require('dotenv').config();
 console.log('🔍 DATABASE_URL exists:', !!process.env.DATABASE_URL);
 console.log('🔍 NODE_ENV:', process.env.NODE_ENV);
 
-// =====================================================
+
 // DATABASE CONNECTION
-// =====================================================
+
 const { sequelize, testConnection } = require('./config/database');
 
-// =====================================================
+
 // IMPORT ALL MODELS
-// =====================================================
+
 const User = require('./models/User');
 const OTP = require('./models/OTP');
 const RiskAssessment = require('./models/RiskAssessment');
@@ -24,9 +24,9 @@ const MonitoringDashboard = require('./models/MonitoringDashboard');
 const AuditPlanTeamMember = require('./models/AuditPlanTeamMember');
 const DashboardShare = require('./models/DashboardShare');
 
-// =====================================================
+
 // SET UP ASSOCIATIONS - IMPROVED VERSION
-// =====================================================
+
 const setupAssociations = () => {
   console.log('🔗 Setting up model associations...');
   
@@ -78,9 +78,9 @@ const { swaggerUi, swaggerDocument, swaggerOptions } = require('./swagger');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// =====================================================
+
 // DATABASE INITIALIZATION
-// =====================================================
+
 const initializeDatabase = async () => {
   try {
     // Test connection
@@ -103,9 +103,9 @@ const initializeDatabase = async () => {
 // Initialize database
 initializeDatabase();
 
-// =====================================================
+
 // MIDDLEWARE
-// =====================================================
+
 app.use(helmet());
 
 // Serve static files from uploads directory
@@ -143,9 +143,9 @@ const authLimiter = rateLimit({
 });
 app.use('/api/auth/', authLimiter);
 
-// =====================================================
+
 // ROUTES
-// =====================================================
+
 app.use('/api/qa', qaRoutes);
 app.use('/api/auth', authRoutes);
 
@@ -161,9 +161,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// =====================================================
+
 // ROOT ROUTE
-// =====================================================
+
 app.get('/', (req, res) => {
   res.json({
     success: true,
