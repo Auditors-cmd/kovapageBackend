@@ -3,6 +3,7 @@ const { protect } = require('../middleware/auth');
 const { hasRoleLevel } = require('../middleware/roles');
 const { Op } = require('sequelize');
 const XLSX = require('xlsx');
+const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 const RiskAssessment = require('../models/RiskAssessment');
@@ -92,6 +93,206 @@ const groupBy = (data, key) => {
     acc[group].push(item);
     return acc;
   }, {});
+};
+
+const QA_PLAN_QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
+
+const getQaPlanInclude = () => ([
+  {
+    model: User,
+    as: 'creator',
+    attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+  },
+  {
+    model: User,
+    as: 'teamLead',
+    attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+  },
+  {
+    model: User,
+    as: 'approver',
+    attributes: ['id', 'name', 'email', 'profilePhotoUrl']
+  },
+  {
+    model: RiskAssessment,
+    as: 'riskAssessment',
+    attributes: [
+      'id', 'title', 'status', 'fileUrl', 'cloudinaryPublicId',
+      'totalRisks', 'highRiskCount', 'mediumRiskCount', 'lowRiskCount'
+    ]
+  }
+]);
+
+const getQuarterFromDate = (dateValue) => {
+  if (!dateValue) return null;
+  const date = new Date(dateValue);
+  if (Number.isNaN(date.getTime())) return null;
+  return `Q${Math.floor(date.getMonth() / 3) + 1}`;
+};
+
+const detectQuarter = (plan) => {
+  if (plan.auditPeriod) {
+    const quarterMatch = plan.auditPeriod.toString().toUpperCase().match(/Q[1-4]/);
+    if (quarterMatch) return quarterMatch[0];
+  }
+  return getQuarterFromDate(plan.startDate) || getQuarterFromDate(plan.createdAt);
+};
+
+const detectFrequency = (plan) => {
+  const periodText = (plan.auditPeriod || '').toString().toLowerCase();
+  if (periodText.includes('annual') || periodText.includes('fy')) return 'Annual';
+  if (periodText.includes('quarter') || periodText.includes('q')) return 'Quarterly';
+  return 'Annual';
+};
+
+const estimateResources = (plan, auditorCapacityHours) => {
+  const teamSize = Array.isArray(plan.teamMemberIds) ? plan.teamMemberIds.length : 0;
+  if (teamSize > 0) return teamSize;
+
+  const hours = parseInt(plan.resourceHours || 0, 10);
+  if (hours > 0 && auditorCapacityHours > 0) {
+    return Math.max(1, Math.ceil(hours / auditorCapacityHours));
+  }
+  return 0;
+};
+
+const deriveRiskScore = (plan) => {
+  const manualScore = parseFloat(plan?.metadata?.manualOperationalRiskScore);
+  if (!Number.isNaN(manualScore)) {
+    return Math.max(0, Math.min(100, Math.round(manualScore)));
+  }
+
+  const high = parseInt(plan?.riskAssessment?.highRiskCount || 0, 10);
+  const medium = parseInt(plan?.riskAssessment?.mediumRiskCount || 0, 10);
+  const low = parseInt(plan?.riskAssessment?.lowRiskCount || 0, 10);
+  const total = parseInt(plan?.riskAssessment?.totalRisks || 0, 10);
+
+  if (!total) return 0;
+  const weightedScore = (high * 3) + (medium * 2) + low;
+  const normalized = (weightedScore / (total * 3)) * 100;
+  return Math.round(normalized);
+};
+
+const deriveRiskRating = (score, plan = null) => {
+  const manualRating = plan?.metadata?.manualRiskRating;
+  if (manualRating && ['High', 'Medium', 'Low'].includes(manualRating)) return manualRating;
+  if (score >= 70) return 'High';
+  if (score >= 40) return 'Medium';
+  return 'Low';
+};
+
+const calculatePercentChange = (priorValue, currentValue) => {
+  if (!priorValue) return currentValue > 0 ? 100 : 0;
+  return Number((((currentValue - priorValue) / priorValue) * 100).toFixed(1));
+};
+
+const escapeHtml = (value) => {
+  return value
+    .toString()
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+const getAvailableAuditorsCount = async () => {
+  const configuredAuditorCapacity = parseInt(process.env.AVAILABLE_AUDITORS || '', 10);
+  if (!Number.isNaN(configuredAuditorCapacity) && configuredAuditorCapacity >= 0) {
+    return configuredAuditorCapacity;
+  }
+
+  return (await User.count({
+    where: {
+      isActive: true,
+      role: {
+        [Op.in]: ['team_member', 'team_lead', 'quality_assurance']
+      }
+    }
+  })) || 0;
+};
+
+const buildPlanDashboardData = (plans, availableAuditors, auditorCapacityHours) => {
+  const quarterlyDistributionMap = QA_PLAN_QUARTERS.reduce((acc, quarter) => {
+    acc[quarter] = {
+      quarter,
+      auditsScheduled: 0,
+      resources: 0,
+      availableAuditors,
+      capacityPercent: 0
+    };
+    return acc;
+  }, {});
+
+  const consolidatedRows = plans.map(plan => {
+    const quarter = detectQuarter(plan);
+    const resources = estimateResources(plan, auditorCapacityHours);
+    const score = deriveRiskScore(plan);
+    const budget = Number((parseFloat(plan.budget) || 0).toFixed(2));
+
+    if (quarter && quarterlyDistributionMap[quarter]) {
+      quarterlyDistributionMap[quarter].auditsScheduled += 1;
+      quarterlyDistributionMap[quarter].resources += resources;
+    }
+
+    return {
+      id: plan.id,
+      planNumber: plan.planNumber,
+      title: plan.title,
+      unitName: plan.department || 'Unassigned',
+      operationalRiskScore: score,
+      riskRating: deriveRiskRating(score, plan),
+      frequency: detectFrequency(plan),
+      quarter: quarter || 'N/A',
+      resources,
+      budget,
+      status: plan.status
+    };
+  });
+
+  const quarterlyDistribution = QA_PLAN_QUARTERS.map(quarter => {
+    const card = quarterlyDistributionMap[quarter];
+    const capacityPercent = availableAuditors > 0
+      ? Number(((card.resources / availableAuditors) * 100).toFixed(1))
+      : 0;
+
+    return {
+      ...card,
+      capacityPercent
+    };
+  });
+
+  const consolidatedTotals = consolidatedRows.reduce((acc, row) => {
+    acc.resources += row.resources;
+    acc.budget = Number((acc.budget + row.budget).toFixed(2));
+    return acc;
+  }, { resources: 0, budget: 0 });
+
+  return {
+    quarterlyDistribution,
+    consolidatedAuditPlan: {
+      unitsReadyForCaeReview: plans.filter(p => p.status === 'approved').length,
+      rows: consolidatedRows,
+      totals: consolidatedTotals
+    }
+  };
+};
+
+const buildAuditPlansWhere = ({ status, department, ids }) => {
+  const where = {};
+  if (status) where.status = status;
+  if (department) where.department = department;
+  if (Array.isArray(ids) && ids.length > 0) where.id = ids;
+  return where;
+};
+
+const fetchAuditPlans = async ({ status, department, ids }) => {
+  const where = buildAuditPlansWhere({ status, department, ids });
+  return AuditPlan.findAll({
+    where,
+    order: [['createdAt', 'DESC']],
+    include: getQaPlanInclude()
+  });
 };
 
 
@@ -737,6 +938,7 @@ router.get('/dashboard-data', async (req, res) => {
   try {
     const currentYear = new Date().getFullYear();
     const priorYear = currentYear - 1;
+    const quarterOrder = ['Q1', 'Q2', 'Q3', 'Q4'];
 
     // Initialize with default values
     const auditPerformance = {
@@ -804,12 +1006,12 @@ router.get('/dashboard-data', async (req, res) => {
 
     // Calculate quarterly variance safely
     const quarterlyVariance = {
-      quarters: ['Q1', 'Q2', 'Q3', 'Q4'],
+      quarters: quarterOrder,
       variance: [],
       percentChange: []
     };
 
-    ['Q1', 'Q2', 'Q3', 'Q4'].forEach(quarter => {
+    quarterOrder.forEach(quarter => {
       const current = auditPerformance.currentYear.quarters[quarter] || 0;
       const prior = auditPerformance.priorYear.quarters[quarter] || 0;
       const variance = current - prior;
@@ -817,11 +1019,7 @@ router.get('/dashboard-data', async (req, res) => {
       quarterlyVariance.variance.push(variance);
       
       // Safe percent change calculation
-      if (prior === 0) {
-        quarterlyVariance.percentChange.push(variance > 0 ? 100 : 0);
-      } else {
-        quarterlyVariance.percentChange.push(Math.round((variance / prior) * 100));
-      }
+      quarterlyVariance.percentChange.push(calculatePercentChange(prior, current));
     });
 
     // Get metrics with error handling
@@ -845,7 +1043,12 @@ router.get('/dashboard-data', async (req, res) => {
     }
 
     try {
-      pendingApprovals = await AuditPlan.count({ where: { status: 'pending_approval' } }) || 0;
+      pendingApprovals = await AuditPlan.count({
+        where: sequelize.where(
+          sequelize.literal(`COALESCE(("metadata"->'caeSubmission'->>'submitted')::boolean, false)`),
+          true
+        )
+      }) || 0;
     } catch (err) {
       console.log('Error counting pending approvals:', err.message);
     }
@@ -876,6 +1079,14 @@ router.get('/dashboard-data', async (req, res) => {
 
     let recentRiskAssessments = 0;
     let totalRiskFiles = 0;
+    let resourceHoursRequired = 0;
+    let resourcesRequired = 0;
+    let availableAuditors = 0;
+    let budgetRequired = 0;
+    let budgetAllocated = 0;
+    let unitYtdRows = [];
+    const budgetCurrency = process.env.BUDGET_CURRENCY || 'NGN';
+    const auditorCapacityHours = parseInt(process.env.AUDITOR_CAPACITY_HOURS || '160', 10);
 
     try {
       recentRiskAssessments = await RiskAssessment.count({
@@ -899,7 +1110,158 @@ router.get('/dashboard-data', async (req, res) => {
       console.log('Error counting cloudinary files:', err.message);
     }
 
+    try {
+      const yearlyResourceHours = await AuditPlan.sum('resourceHours', {
+        where: sequelize.where(
+          sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+          currentYear
+        )
+      });
+
+      resourceHoursRequired = Math.round(parseFloat(yearlyResourceHours) || 0);
+      resourcesRequired = auditorCapacityHours > 0
+        ? Math.ceil(resourceHoursRequired / auditorCapacityHours)
+        : 0;
+    } catch (err) {
+      console.log('Error calculating resource requirements:', err.message);
+    }
+
+    try {
+      const configuredAuditorCapacity = parseInt(process.env.AVAILABLE_AUDITORS || '', 10);
+      if (!Number.isNaN(configuredAuditorCapacity) && configuredAuditorCapacity >= 0) {
+        availableAuditors = configuredAuditorCapacity;
+      } else {
+        availableAuditors = await User.count({
+          where: {
+            isActive: true,
+            role: {
+              [Op.in]: ['team_member', 'team_lead', 'quality_assurance']
+            }
+          }
+        }) || 0;
+      }
+    } catch (err) {
+      console.log('Error calculating available auditors:', err.message);
+    }
+
+    try {
+      const requiredBudget = await AuditPlan.sum('budget', {
+        where: sequelize.where(
+          sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+          currentYear
+        )
+      });
+
+      const allocatedBudget = await AuditPlan.sum('budget', {
+        where: {
+          [Op.and]: [
+            sequelize.where(
+              sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+              currentYear
+            ),
+            {
+              status: {
+                [Op.in]: ['approved', 'consolidated', 'implemented']
+              }
+            }
+          ]
+        }
+      });
+
+      budgetRequired = Number((parseFloat(requiredBudget) || 0).toFixed(2));
+      budgetAllocated = Number((parseFloat(allocatedBudget) || 0).toFixed(2));
+    } catch (err) {
+      console.log('Error calculating budget requirements:', err.message);
+    }
+
+    try {
+      const [currentYearUnits, priorYearUnits] = await Promise.all([
+        AuditPlan.findAll({
+          where: sequelize.where(
+            sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+            currentYear
+          ),
+          attributes: ['department'],
+          raw: true
+        }),
+        AuditPlan.findAll({
+          where: sequelize.where(
+            sequelize.fn('EXTRACT', sequelize.literal('YEAR FROM "createdAt"')),
+            priorYear
+          ),
+          attributes: ['department'],
+          raw: true
+        })
+      ]);
+
+      const normalizeUnit = (value) => {
+        if (!value) return 'Unassigned';
+        const unitName = value.toString().trim();
+        return unitName || 'Unassigned';
+      };
+
+      const currentUnitCounts = {};
+      const priorUnitCounts = {};
+
+      currentYearUnits.forEach(plan => {
+        const unit = normalizeUnit(plan.department);
+        currentUnitCounts[unit] = (currentUnitCounts[unit] || 0) + 1;
+      });
+
+      priorYearUnits.forEach(plan => {
+        const unit = normalizeUnit(plan.department);
+        priorUnitCounts[unit] = (priorUnitCounts[unit] || 0) + 1;
+      });
+
+      const allUnits = Array.from(
+        new Set([...Object.keys(currentUnitCounts), ...Object.keys(priorUnitCounts)])
+      ).sort((a, b) => a.localeCompare(b));
+
+      unitYtdRows = allUnits.map(unit => {
+        const priorYtd = priorUnitCounts[unit] || 0;
+        const currentYtd = currentUnitCounts[unit] || 0;
+        const variance = currentYtd - priorYtd;
+        return {
+          businessUnit: unit,
+          priorYtd,
+          currentYtd,
+          variance,
+          percentChange: calculatePercentChange(priorYtd, currentYtd)
+        };
+      });
+    } catch (err) {
+      console.log('Error calculating unit YTD comparison:', err.message);
+    }
+
     const completedThisYear = Object.values(auditPerformance.currentYear.quarters).reduce((a, b) => a + b, 0);
+    const quarterComparisonRows = quarterOrder.map(quarter => {
+      const prior = auditPerformance.priorYear.quarters[quarter] || 0;
+      const current = auditPerformance.currentYear.quarters[quarter] || 0;
+      const variance = current - prior;
+      return {
+        quarter,
+        priorYear: prior,
+        currentYear: current,
+        variance,
+        percentChange: calculatePercentChange(prior, current)
+      };
+    });
+
+    const quarterTotals = quarterComparisonRows.reduce((acc, row) => {
+      acc.priorYear += row.priorYear;
+      acc.currentYear += row.currentYear;
+      return acc;
+    }, { priorYear: 0, currentYear: 0 });
+    quarterTotals.variance = quarterTotals.currentYear - quarterTotals.priorYear;
+    quarterTotals.percentChange = calculatePercentChange(quarterTotals.priorYear, quarterTotals.currentYear);
+
+    const unitTotals = unitYtdRows.reduce((acc, row) => {
+      acc.priorYtd += row.priorYtd;
+      acc.currentYtd += row.currentYtd;
+      return acc;
+    }, { priorYtd: 0, currentYtd: 0 });
+    unitTotals.variance = unitTotals.currentYtd - unitTotals.priorYtd;
+    unitTotals.percentChange = calculatePercentChange(unitTotals.priorYtd, unitTotals.currentYtd);
 
     const dashboardData = {
       charts: {
@@ -976,13 +1338,70 @@ router.get('/dashboard-data', async (req, res) => {
           label: 'Files in Cloudinary',
           count: totalRiskFiles,
           icon: 'cloud'
+        },
+        resourcesRequired: {
+          label: 'Resources Required',
+          count: resourcesRequired,
+          hours: resourceHoursRequired,
+          icon: 'team'
+        },
+        budgetRequired: {
+          label: 'Budget Required',
+          amount: budgetRequired,
+          allocated: budgetAllocated,
+          currency: budgetCurrency,
+          icon: 'currency'
+        },
+        availableAuditors: {
+          label: 'Available Auditors',
+          count: availableAuditors,
+          icon: 'users'
         }
+      },
+      comparisonTables: {
+        quarterAnalysis: {
+          title: 'Comparative Analysis: Audit Performance',
+          subtitle: 'Prior Year vs Current Year audit counts by quarter',
+          priorYear,
+          currentYear,
+          rows: quarterComparisonRows,
+          totals: {
+            label: 'Total',
+            ...quarterTotals
+          }
+        },
+        unitYtdAnalysis: {
+          title: 'Audit Counts by Unit (Year-to-Date)',
+          subtitle: 'Prior year vs current year by business unit',
+          priorYear,
+          currentYear,
+          rows: unitYtdRows,
+          totals: {
+            label: 'Total',
+            ...unitTotals
+          }
+        }
+      },
+      executiveSummary: {
+        totalAudits,
+        resourcesRequired,
+        resourceHoursRequired,
+        availableAuditors,
+        budgetRequired,
+        budgetAllocated,
+        budgetCurrency
       },
       summary: {
         totalAudits,
         pendingReviews: pendingPlansCount,
         completedThisYear,
-        totalCloudinaryFiles: totalRiskFiles
+        totalCloudinaryFiles: totalRiskFiles,
+        resourcesRequired,
+        resourceHoursRequired,
+        availableAuditors,
+        budgetRequired,
+        budgetAllocated,
+        budgetCurrency
       }
     };
 
@@ -1011,42 +1430,23 @@ router.get('/dashboard-data', async (req, res) => {
 router.get('/audit-plans', async (req, res) => {
   try {
     const { status, department } = req.query;
-    
-    const where = {};
-    if (status) where.status = status;
-    if (department) where.department = department;
-
-    const plans = await AuditPlan.findAll({
-      where,
-      order: [['createdAt', 'DESC']],
-      include: [
-        {
-          model: User,
-          as: 'creator',
-          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-        },
-        {
-          model: User,
-          as: 'teamLead',
-          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-        },
-        {
-          model: User,
-          as: 'approver',
-          attributes: ['id', 'name', 'email', 'profilePhotoUrl']
-        },
-        {
-          model: RiskAssessment,
-          as: 'riskAssessment',
-          attributes: ['id', 'title', 'status', 'fileUrl', 'cloudinaryPublicId']
-        }
-      ]
-    });
+    const auditorCapacityHours = parseInt(process.env.AUDITOR_CAPACITY_HOURS || '160', 10);
+    const plans = await fetchAuditPlans({ status, department });
 
     // Count plans pending review
     const pendingCount = await AuditPlan.count({
       where: { status: 'under_review' }
     });
+
+    let availableAuditors = 0;
+    try {
+      availableAuditors = await getAvailableAuditorsCount();
+    } catch (err) {
+      console.log('Error calculating available auditors for plan dashboard:', err.message);
+    }
+
+    const planDashboard = buildPlanDashboardData(plans, availableAuditors, auditorCapacityHours);
+    const submittedToCae = plans.filter(p => p?.metadata?.caeSubmission?.submitted === true).length;
 
     res.json({
       success: true,
@@ -1054,8 +1454,10 @@ router.get('/audit-plans', async (req, res) => {
       summary: {
         total: plans.length,
         pendingReview: pendingCount,
-        readyForConsolidation: plans.filter(p => p.status === 'approved').length
-      }
+        readyForConsolidation: plans.filter(p => p.status === 'approved').length,
+        submittedToCae
+      },
+      planDashboard
     });
 
   } catch (error) {
@@ -1067,6 +1469,361 @@ router.get('/audit-plans', async (req, res) => {
     });
   }
 });
+
+// @desc    Update consolidated plan risk score (Edit Score action)
+// @route   PUT /api/qa/audit-plans/:id/score
+// @access  Quality Assurance and above
+router.put('/audit-plans/:id/score', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { operationalRiskScore, riskRating } = req.body;
+    const parsedScore = Number(operationalRiskScore);
+    const allowedRatings = ['High', 'Medium', 'Low'];
+
+    if (Number.isNaN(parsedScore) || parsedScore < 0 || parsedScore > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'operationalRiskScore must be a number between 0 and 100'
+      });
+    }
+
+    if (riskRating && !allowedRatings.includes(riskRating)) {
+      return res.status(400).json({
+        success: false,
+        message: 'riskRating must be one of: High, Medium, Low'
+      });
+    }
+
+    const plan = await AuditPlan.findByPk(id, { include: getQaPlanInclude() });
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Audit plan not found'
+      });
+    }
+
+    const resolvedRating = riskRating || deriveRiskRating(parsedScore);
+    await plan.update({
+      metadata: {
+        ...(plan.metadata || {}),
+        manualOperationalRiskScore: parsedScore,
+        manualRiskRating: resolvedRating,
+        scoreUpdatedAt: new Date(),
+        scoreUpdatedBy: req.user.id,
+        scoreUpdatedByName: req.user.name
+      }
+    });
+
+    const dashboardRow = buildPlanDashboardData(
+      [plan],
+      0,
+      parseInt(process.env.AUDITOR_CAPACITY_HOURS || '160', 10)
+    ).consolidatedAuditPlan.rows[0];
+
+    return res.json({
+      success: true,
+      message: 'Risk score updated successfully',
+      data: {
+        id: plan.id,
+        operationalRiskScore: dashboardRow.operationalRiskScore,
+        riskRating: dashboardRow.riskRating,
+        metadata: plan.metadata
+      }
+    });
+  } catch (error) {
+    console.error('Update plan score error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error updating plan score',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Export consolidated audit plan to Excel
+// @route   GET /api/qa/audit-plans/export-excel
+// @access  Quality Assurance and above
+const exportAuditPlansExcelHandler = async (req, res) => {
+  try {
+    const { status, department } = req.query;
+    const auditorCapacityHours = parseInt(process.env.AUDITOR_CAPACITY_HOURS || '160', 10);
+    const plans = await fetchAuditPlans({ status, department });
+    const availableAuditors = await getAvailableAuditorsCount();
+    const planDashboard = buildPlanDashboardData(plans, availableAuditors, auditorCapacityHours);
+    const budgetCurrency = process.env.BUDGET_CURRENCY || 'NGN';
+
+    const workbook = XLSX.utils.book_new();
+
+    const quarterlySheetData = [
+      ['Quarter', 'Audits Scheduled', 'Resources', 'Available Auditors', 'Capacity %'],
+      ...planDashboard.quarterlyDistribution.map(item => ([
+        item.quarter,
+        item.auditsScheduled,
+        item.resources,
+        item.availableAuditors,
+        item.capacityPercent
+      ]))
+    ];
+
+    const consolidatedSheetData = [
+      ['Unit Name', 'Operational Risk Score', 'Risk Rating', 'Frequency', 'Quarter', 'Resources', `Budget (${budgetCurrency})`, 'Status'],
+      ...planDashboard.consolidatedAuditPlan.rows.map(row => ([
+        row.unitName,
+        row.operationalRiskScore,
+        row.riskRating,
+        row.frequency,
+        row.quarter,
+        row.resources,
+        row.budget,
+        row.status
+      ])),
+      ['TOTAL', '', '', '', '', planDashboard.consolidatedAuditPlan.totals.resources, planDashboard.consolidatedAuditPlan.totals.budget, '']
+    ];
+
+    const quarterlySheet = XLSX.utils.aoa_to_sheet(quarterlySheetData);
+    const consolidatedSheet = XLSX.utils.aoa_to_sheet(consolidatedSheetData);
+    quarterlySheet['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 12 }, { wch: 18 }, { wch: 12 }];
+    consolidatedSheet['!cols'] = [{ wch: 24 }, { wch: 24 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 16 }, { wch: 14 }];
+
+    XLSX.utils.book_append_sheet(workbook, quarterlySheet, 'Quarterly Distribution');
+    XLSX.utils.book_append_sheet(workbook, consolidatedSheet, 'Consolidated Audit Plan');
+
+    const buffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const fileName = `QA_Consolidated_Audit_Plan_${timestamp}.xlsx`;
+
+    res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Length', buffer.length);
+    return res.send(buffer);
+  } catch (error) {
+    console.error('Export audit plans Excel error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error exporting audit plans to Excel',
+      error: error.message
+    });
+  }
+};
+
+router.get('/audit-plans/export-excel', exportAuditPlansExcelHandler);
+router.get('/audit-plans/export.xlsx', exportAuditPlansExcelHandler);
+
+// @desc    Export consolidated audit plan to PDF
+// @route   GET /api/qa/audit-plans/export-pdf
+// @access  Quality Assurance and above
+const exportAuditPlansPdfHandler = async (req, res) => {
+  let browser;
+  try {
+    const { status, department } = req.query;
+    const auditorCapacityHours = parseInt(process.env.AUDITOR_CAPACITY_HOURS || '160', 10);
+    const plans = await fetchAuditPlans({ status, department });
+    const availableAuditors = await getAvailableAuditorsCount();
+    const planDashboard = buildPlanDashboardData(plans, availableAuditors, auditorCapacityHours);
+    const budgetCurrency = process.env.BUDGET_CURRENCY || 'NGN';
+
+    const quarterCardsHtml = planDashboard.quarterlyDistribution.map(item => `
+      <tr>
+        <td>${escapeHtml(item.quarter)}</td>
+        <td>${item.auditsScheduled}</td>
+        <td>${item.resources}</td>
+        <td>${item.availableAuditors}</td>
+        <td>${item.capacityPercent}%</td>
+      </tr>
+    `).join('');
+
+    const consolidatedRowsHtml = planDashboard.consolidatedAuditPlan.rows.map(row => `
+      <tr>
+        <td>${escapeHtml(row.unitName)}</td>
+        <td>${row.operationalRiskScore}</td>
+        <td>${escapeHtml(row.riskRating)}</td>
+        <td>${escapeHtml(row.frequency)}</td>
+        <td>${escapeHtml(row.quarter)}</td>
+        <td>${row.resources}</td>
+        <td>${budgetCurrency} ${row.budget.toLocaleString()}</td>
+        <td>${escapeHtml(row.status)}</td>
+      </tr>
+    `).join('');
+
+    const html = `
+      <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; font-size: 12px; color: #0f172a; padding: 24px; }
+          h1 { margin: 0 0 8px; font-size: 22px; }
+          h2 { margin: 24px 0 10px; font-size: 16px; }
+          p.meta { margin: 0 0 16px; color: #475569; }
+          table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+          th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; }
+          th { background: #f1f5f9; font-weight: 700; }
+          tfoot td { font-weight: 700; background: #f8fafc; }
+        </style>
+      </head>
+      <body>
+        <h1>Consolidated Audit Plan</h1>
+        <p class="meta">Generated ${new Date().toLocaleString()}</p>
+
+        <h2>Quarterly Distribution</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Quarter</th>
+              <th>Audits Scheduled</th>
+              <th>Resources</th>
+              <th>Available Auditors</th>
+              <th>Capacity %</th>
+            </tr>
+          </thead>
+          <tbody>${quarterCardsHtml}</tbody>
+        </table>
+
+        <h2>Consolidated Audit Plan</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Unit Name</th>
+              <th>Operational Risk Score</th>
+              <th>Risk Rating</th>
+              <th>Frequency</th>
+              <th>Quarter</th>
+              <th>Resources</th>
+              <th>Budget</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>${consolidatedRowsHtml}</tbody>
+          <tfoot>
+            <tr>
+              <td colspan="5">TOTAL</td>
+              <td>${planDashboard.consolidatedAuditPlan.totals.resources}</td>
+              <td>${budgetCurrency} ${planDashboard.consolidatedAuditPlan.totals.budget.toLocaleString()}</td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </body>
+      </html>
+    `;
+
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle0' });
+    const pdfBuffer = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '16mm', right: '12mm', bottom: '16mm', left: '12mm' }
+    });
+
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const fileName = `QA_Consolidated_Audit_Plan_${timestamp}.pdf`;
+    res.setHeader('Content-Disposition', `attachment; filename=${fileName}`);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Length', pdfBuffer.length);
+    return res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Export audit plans PDF error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error exporting audit plans to PDF',
+      error: error.message
+    });
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
+};
+
+router.get('/audit-plans/export-pdf', exportAuditPlansPdfHandler);
+router.get('/audit-plans/export.pdf', exportAuditPlansPdfHandler);
+
+// @desc    Submit approved plans to CAE
+// @route   POST /api/qa/submit-to-cae
+// @access  Quality Assurance and above
+const submitToCaeHandler = async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { planIds, notes, status, department } = req.body;
+    const validPlanIds = Array.isArray(planIds) ? planIds.filter(Boolean) : [];
+
+    const filters = {
+      status: status || 'approved',
+      department,
+      ids: validPlanIds.length > 0 ? validPlanIds : undefined
+    };
+
+    const plans = await fetchAuditPlans(filters);
+
+    if (validPlanIds.length > 0 && plans.length !== validPlanIds.length) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'One or more selected plans were not found'
+      });
+    }
+
+    if (plans.length === 0) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'No plans matched the submission criteria'
+      });
+    }
+
+    const submissionId = `CAE-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const submittedAt = new Date();
+
+    for (const plan of plans) {
+      const currentMetadata = plan.metadata || {};
+      const history = Array.isArray(currentMetadata.caeSubmissionHistory)
+        ? currentMetadata.caeSubmissionHistory
+        : [];
+
+      const submissionRecord = {
+        submissionId,
+        submitted: true,
+        submittedAt,
+        submittedBy: req.user.name,
+        submittedById: req.user.id,
+        notes: notes || null
+      };
+
+      await plan.update({
+        metadata: {
+          ...currentMetadata,
+          caeSubmission: submissionRecord,
+          caeSubmissionHistory: [...history, submissionRecord]
+        }
+      }, { transaction });
+    }
+
+    await transaction.commit();
+    await updateDashboardMetrics(req.user.id);
+
+    return res.status(200).json({
+      success: true,
+      message: `Submitted ${plans.length} plan${plans.length !== 1 ? 's' : ''} to CAE`,
+      data: {
+        submissionId,
+        submittedCount: plans.length,
+        submittedAt,
+        planIds: plans.map(plan => plan.id)
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Submit to CAE error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error submitting plans to CAE',
+      error: error.message
+    });
+  }
+};
+
+router.post('/submit-to-cae', submitToCaeHandler);
+router.post('/audit-plans/submit-to-cae', submitToCaeHandler);
 
 // @desc    Consolidate multiple audit plans
 // @route   POST /api/qa/consolidate-plans

@@ -106,6 +106,11 @@ const AuditPlan = sequelize.define('AuditPlan', {
     defaultValue: [],
     comment: 'List of audit areas to be covered'
   },
+  // Extra metadata for workflow actions (CAE submission, manual score edits, etc.)
+  metadata: {
+    type: DataTypes.JSONB,
+    defaultValue: {}
+  },
   // Progress
   progressPercentage: {
     type: DataTypes.FLOAT,

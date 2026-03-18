@@ -192,6 +192,10 @@ app.get('/', (req, res) => {
       'POST /api/qa/upload-risk-data',
       'POST /api/qa/upload-risk-excel',
       'GET  /api/qa/download-risk-template',
+      'PUT  /api/qa/audit-plans/:id/score',
+      'GET  /api/qa/audit-plans/export-excel',
+      'GET  /api/qa/audit-plans/export-pdf',
+      'POST /api/qa/submit-to-cae',
       'POST /api/qa/consolidate-plans'
     ],
     timestamp: new Date().toISOString()

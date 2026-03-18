@@ -701,7 +701,115 @@ Complete audit management system with 8 specialized user roles, OTP and password
                       count: { type: 'integer' },
                       icon: { type: 'string', example: 'cloud' }
                     }
+                  },
+                  resourcesRequired: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', example: 'Resources Required' },
+                      count: { type: 'integer' },
+                      hours: { type: 'integer' },
+                      icon: { type: 'string', example: 'team' }
+                    }
+                  },
+                  budgetRequired: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', example: 'Budget Required' },
+                      amount: { type: 'number' },
+                      allocated: { type: 'number' },
+                      currency: { type: 'string', example: 'NGN' },
+                      icon: { type: 'string', example: 'currency' }
+                    }
+                  },
+                  availableAuditors: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', example: 'Available Auditors' },
+                      count: { type: 'integer' },
+                      icon: { type: 'string', example: 'users' }
+                    }
                   }
+                }
+              },
+              comparisonTables: {
+                type: 'object',
+                properties: {
+                  quarterAnalysis: {
+                    type: 'object',
+                    properties: {
+                      title: { type: 'string' },
+                      subtitle: { type: 'string' },
+                      priorYear: { type: 'integer' },
+                      currentYear: { type: 'integer' },
+                      rows: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            quarter: { type: 'string', example: 'Q1' },
+                            priorYear: { type: 'integer' },
+                            currentYear: { type: 'integer' },
+                            variance: { type: 'integer' },
+                            percentChange: { type: 'number', example: -25.0 }
+                          }
+                        }
+                      },
+                      totals: {
+                        type: 'object',
+                        properties: {
+                          label: { type: 'string', example: 'Total' },
+                          priorYear: { type: 'integer' },
+                          currentYear: { type: 'integer' },
+                          variance: { type: 'integer' },
+                          percentChange: { type: 'number', example: 12.5 }
+                        }
+                      }
+                    }
+                  },
+                  unitYtdAnalysis: {
+                    type: 'object',
+                    properties: {
+                      title: { type: 'string' },
+                      subtitle: { type: 'string' },
+                      priorYear: { type: 'integer' },
+                      currentYear: { type: 'integer' },
+                      rows: {
+                        type: 'array',
+                        items: {
+                          type: 'object',
+                          properties: {
+                            businessUnit: { type: 'string', example: 'Financial Crime' },
+                            priorYtd: { type: 'integer' },
+                            currentYtd: { type: 'integer' },
+                            variance: { type: 'integer' },
+                            percentChange: { type: 'number', example: 100.0 }
+                          }
+                        }
+                      },
+                      totals: {
+                        type: 'object',
+                        properties: {
+                          label: { type: 'string', example: 'Total' },
+                          priorYtd: { type: 'integer' },
+                          currentYtd: { type: 'integer' },
+                          variance: { type: 'integer' },
+                          percentChange: { type: 'number', example: 10.0 }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              executiveSummary: {
+                type: 'object',
+                properties: {
+                  totalAudits: { type: 'integer' },
+                  resourcesRequired: { type: 'integer' },
+                  resourceHoursRequired: { type: 'integer' },
+                  availableAuditors: { type: 'integer' },
+                  budgetRequired: { type: 'number' },
+                  budgetAllocated: { type: 'number' },
+                  budgetCurrency: { type: 'string', example: 'NGN' }
                 }
               },
               summary: {
@@ -710,7 +818,13 @@ Complete audit management system with 8 specialized user roles, OTP and password
                   totalAudits: { type: 'integer' },
                   pendingReviews: { type: 'integer' },
                   completedThisYear: { type: 'integer' },
-                  totalCloudinaryFiles: { type: 'integer' }
+                  totalCloudinaryFiles: { type: 'integer' },
+                  resourcesRequired: { type: 'integer' },
+                  resourceHoursRequired: { type: 'integer' },
+                  availableAuditors: { type: 'integer' },
+                  budgetRequired: { type: 'number' },
+                  budgetAllocated: { type: 'number' },
+                  budgetCurrency: { type: 'string', example: 'NGN' }
                 }
               }
             }
@@ -1997,9 +2111,273 @@ Complete audit management system with 8 specialized user roles, OTP and password
           }
         ],
         responses: {
-          '200': { description: 'Audit plans retrieved' },
+          '200': {
+            description: 'Audit plans retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    data: {
+                      type: 'array',
+                      items: { type: 'object' }
+                    },
+                    summary: {
+                      type: 'object',
+                      properties: {
+                        total: { type: 'integer' },
+                        pendingReview: { type: 'integer' },
+                        readyForConsolidation: { type: 'integer' },
+                        submittedToCae: { type: 'integer' }
+                      }
+                    },
+                    planDashboard: {
+                      type: 'object',
+                      properties: {
+                        quarterlyDistribution: {
+                          type: 'array',
+                          items: {
+                            type: 'object',
+                            properties: {
+                              quarter: { type: 'string', example: 'Q2' },
+                              auditsScheduled: { type: 'integer' },
+                              resources: { type: 'integer' },
+                              availableAuditors: { type: 'integer' },
+                              capacityPercent: { type: 'number', example: 5.0 }
+                            }
+                          }
+                        },
+                        consolidatedAuditPlan: {
+                          type: 'object',
+                          properties: {
+                            unitsReadyForCaeReview: { type: 'integer' },
+                            rows: {
+                              type: 'array',
+                              items: {
+                                type: 'object',
+                                properties: {
+                                  id: { type: 'string', format: 'uuid' },
+                                  unitName: { type: 'string', example: 'Financial Crime' },
+                                  operationalRiskScore: { type: 'integer', example: 90 },
+                                  riskRating: { type: 'string', example: 'Medium' },
+                                  frequency: { type: 'string', example: 'Annual' },
+                                  quarter: { type: 'string', example: 'Q2' },
+                                  resources: { type: 'integer', example: 5 },
+                                  budget: { type: 'number', example: 3600000 },
+                                  status: { type: 'string', example: 'approved' }
+                                }
+                              }
+                            },
+                            totals: {
+                              type: 'object',
+                              properties: {
+                                resources: { type: 'integer' },
+                                budget: { type: 'number' }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
           '401': { $ref: '#/components/responses/Unauthorized' },
           '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/audit-plans/export-excel': {
+      get: {
+        summary: 'Export Consolidated Audit Plan to Excel',
+        description: 'Download quarterly distribution and consolidated audit plan as an Excel file.',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            description: 'Optional status filter',
+            schema: { type: 'string' }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            description: 'Optional department filter',
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Excel file exported',
+            content: {
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+                schema: { type: 'string', format: 'binary' }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/audit-plans/{id}/score': {
+      put: {
+        summary: 'Update Consolidated Plan Risk Score',
+        description: 'Supports the Edit Score action by storing manual risk score and rating on plan metadata.',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['operationalRiskScore'],
+                properties: {
+                  operationalRiskScore: {
+                    type: 'number',
+                    minimum: 0,
+                    maximum: 100
+                  },
+                  riskRating: {
+                    type: 'string',
+                    enum: ['High', 'Medium', 'Low']
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Risk score updated' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/audit-plans/export-pdf': {
+      get: {
+        summary: 'Export Consolidated Audit Plan to PDF',
+        description: 'Download quarterly distribution and consolidated audit plan as a PDF file.',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            description: 'Optional status filter',
+            schema: { type: 'string' }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            description: 'Optional department filter',
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'PDF file exported',
+            content: {
+              'application/pdf': {
+                schema: { type: 'string', format: 'binary' }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/submit-to-cae': {
+      post: {
+        summary: 'Submit Audit Plans to CAE',
+        description: 'Submit approved plans (or selected plan IDs) to CAE and store submission metadata.',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  planIds: {
+                    type: 'array',
+                    items: { type: 'string', format: 'uuid' },
+                    description: 'Optional explicit plan IDs to submit'
+                  },
+                  status: {
+                    type: 'string',
+                    example: 'approved',
+                    description: 'Optional status filter (default: approved)'
+                  },
+                  department: {
+                    type: 'string',
+                    description: 'Optional department filter'
+                  },
+                  notes: {
+                    type: 'string',
+                    description: 'Optional submission note'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': {
+            description: 'Plans submitted to CAE',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    message: { type: 'string' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        submissionId: { type: 'string' },
+                        submittedCount: { type: 'integer' },
+                        submittedAt: { type: 'string', format: 'date-time' },
+                        planIds: {
+                          type: 'array',
+                          items: { type: 'string', format: 'uuid' }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
           '500': { $ref: '#/components/responses/ServerError' }
         }
       }
