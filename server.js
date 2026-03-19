@@ -4,7 +4,18 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const qaRoutes = require('./routes/qualityAssurance');
 const unitHeadRoutes = require('./routes/unitHead');
-require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const dotenv = require('dotenv');
+
+const envCandidates = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(__dirname, '.env'),
+  path.resolve(__dirname, '../.env')
+];
+
+const envPath = envCandidates.find((candidate) => fs.existsSync(candidate));
+dotenv.config(envPath ? { path: envPath } : undefined);
 
 console.log('🔍 DATABASE_URL exists:', !!process.env.DATABASE_URL);
 console.log('🔍 NODE_ENV:', process.env.NODE_ENV);

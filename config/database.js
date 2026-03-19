@@ -1,12 +1,39 @@
 const { Sequelize } = require('sequelize');
-require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const dotenv = require('dotenv');
+
+const envCandidates = [
+  path.resolve(process.cwd(), '.env'),
+  path.resolve(__dirname, '../.env'),
+  path.resolve(__dirname, '../../.env')
+];
+
+const envPath = envCandidates.find((candidate) => fs.existsSync(candidate));
+dotenv.config(envPath ? { path: envPath } : undefined);
 
 let sequelize;
 
 // Check if we should use a DATABASE_URL (common in production like Render)
 if (process.env.DATABASE_URL) {
+  let connectionUrl = process.env.DATABASE_URL;
+
+  try {
+    const parsedUrl = new URL(process.env.DATABASE_URL);
+    const sslMode = parsedUrl.searchParams.get('sslmode');
+
+    // Managed providers (Render/Supabase poolers) often require no-verify unless a CA bundle is configured.
+    if (!sslMode || sslMode === 'require') {
+      parsedUrl.searchParams.set('sslmode', process.env.DB_SSL_MODE || 'no-verify');
+    }
+
+    connectionUrl = parsedUrl.toString();
+  } catch (error) {
+    console.warn('⚠️ DATABASE_URL could not be parsed, using original value.');
+  }
+
   // Use the DATABASE_URL for connection
-  sequelize = new Sequelize(process.env.DATABASE_URL, {
+  sequelize = new Sequelize(connectionUrl, {
     dialect: 'postgres',
     logging: process.env.NODE_ENV === 'development' ? console.log : false,
     dialectOptions: {

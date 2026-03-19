@@ -263,7 +263,7 @@ User.associate = (models) => {
 
   // 7. Dashboards shared with user
   User.belongsToMany(models.MonitoringDashboard, {
-    through: 'dashboard_shares',
+    through: models.DashboardShare,
     foreignKey: 'userId',
     otherKey: 'dashboardId',
     as: 'sharedDashboards'
@@ -271,7 +271,7 @@ User.associate = (models) => {
 
   // 8. User as Team Member in Audit Plans (many-to-many)
   User.belongsToMany(models.AuditPlan, {
-    through: 'audit_plan_team_members',
+    through: models.AuditPlanTeamMember,
     foreignKey: 'userId',
     otherKey: 'auditPlanId',
     as: 'assignedAuditPlans'

@@ -199,7 +199,7 @@ AuditPlan.associate = (models) => {
 
   // An audit plan can have many team members (many-to-many)
   AuditPlan.belongsToMany(models.User, {
-    through: 'audit_plan_team_members',
+    through: models.AuditPlanTeamMember,
     foreignKey: 'auditPlanId',
     otherKey: 'userId',
     as: 'teamMembers'
