@@ -1,15 +1,17 @@
 const nodemailer = require('nodemailer');
 
-const resolveEmailPassword = () => String(process.env.EMAIL_PASSWORD || '').replace(/\s+/g, '').trim();
 const resolveBoolean = (value, fallback = false) => {
   if (value === undefined || value === null || value === '') return fallback;
   return String(value).trim().toLowerCase() === 'true';
 };
 
-const resolveEmailPort = () => {
-  const port = Number(process.env.EMAIL_PORT || 587);
-  return Number.isNaN(port) ? 587 : port;
+const resolveNumber = (value, fallback) => {
+  const parsed = Number(value);
+  return Number.isNaN(parsed) ? fallback : parsed;
 };
+
+const resolveEmailPassword = () => String(process.env.EMAIL_PASSWORD || '').replace(/\s+/g, '').trim();
+const resolveEmailPort = () => resolveNumber(process.env.EMAIL_PORT || 587, 587);
 
 const resolvedEmailPassword = resolveEmailPassword();
 const resolvedEmailPort = resolveEmailPort();
@@ -18,14 +20,31 @@ const resolvedEmailSecure =
     ? resolvedEmailPort === 465
     : resolveBoolean(process.env.EMAIL_SECURE, false);
 
+const emailProvider = String(
+  process.env.EMAIL_PROVIDER || (process.env.RESEND_API_KEY ? 'resend' : 'smtp')
+).trim().toLowerCase();
+
+const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
+const resendApiUrl = process.env.RESEND_API_URL || 'https://api.resend.com/emails';
+const resendTimeoutMs = resolveNumber(process.env.RESEND_TIMEOUT_MS || 20000, 20000);
+
+const resolvedFromAddress =
+  process.env.EMAIL_FROM ||
+  (
+    process.env.EMAIL_FROM_NAME && process.env.EMAIL_USER
+      ? `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`
+      : process.env.EMAIL_USER
+  ) ||
+  'KovaPage <no-reply@kovapage.com>';
+
 const transporterConfig = {
   host: process.env.EMAIL_HOST || 'smtp.gmail.com',
   port: resolvedEmailPort,
   secure: resolvedEmailSecure,
   requireTLS: resolveBoolean(process.env.EMAIL_REQUIRE_TLS, !resolvedEmailSecure),
-  connectionTimeout: Number(process.env.EMAIL_CONNECTION_TIMEOUT || 20000),
-  greetingTimeout: Number(process.env.EMAIL_GREETING_TIMEOUT || 15000),
-  socketTimeout: Number(process.env.EMAIL_SOCKET_TIMEOUT || 30000),
+  connectionTimeout: resolveNumber(process.env.EMAIL_CONNECTION_TIMEOUT || 20000, 20000),
+  greetingTimeout: resolveNumber(process.env.EMAIL_GREETING_TIMEOUT || 15000, 15000),
+  socketTimeout: resolveNumber(process.env.EMAIL_SOCKET_TIMEOUT || 30000, 30000),
   family: 4,
   auth: {
     user: process.env.EMAIL_USER,
@@ -33,244 +52,269 @@ const transporterConfig = {
   }
 };
 
-// Create transporter with SMTP credentials
-const transporter = nodemailer.createTransport(transporterConfig);
+const hasSmtpCredentials = Boolean(process.env.EMAIL_USER && resolvedEmailPassword);
+const transporter = hasSmtpCredentials ? nodemailer.createTransport(transporterConfig) : null;
 
-// Verify email configuration
-console.log('Configuring real email service...');
-console.log('Email:', process.env.EMAIL_USER);
-console.log('Email transport:', {
-  host: transporterConfig.host,
-  port: transporterConfig.port,
-  secure: transporterConfig.secure,
-  requireTLS: transporterConfig.requireTLS,
-  connectionTimeout: transporterConfig.connectionTimeout,
-  greetingTimeout: transporterConfig.greetingTimeout,
-  socketTimeout: transporterConfig.socketTimeout,
-  hasPassword: Boolean(resolvedEmailPassword),
-  passwordLength: resolvedEmailPassword.length
-});
+const normalizeRecipients = (to) => (Array.isArray(to) ? to : [to]).filter(Boolean);
 
-transporter.verify((error, success) => {
-  if (error) {
-    console.log('Email configuration error:', error.message);
-  } else {
-    console.log('REAL email server is ready!');
+const formatProviderError = (payload) => {
+  if (!payload) return 'Unknown provider response';
+  if (typeof payload === 'string') return payload;
+  if (payload.message) return payload.message;
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    return payload.errors.map((entry) => entry.message || String(entry)).join('; ');
   }
-});
+  return JSON.stringify(payload);
+};
+
+const sendViaResend = async (mailOptions) => {
+  if (!resendApiKey) {
+    return { success: false, error: 'RESEND_API_KEY is not configured' };
+  }
+
+  if (typeof fetch !== 'function') {
+    return { success: false, error: 'Global fetch is unavailable in this Node runtime' };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), resendTimeoutMs);
+
+  try {
+    const response = await fetch(resendApiUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${resendApiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: mailOptions.from || resolvedFromAddress,
+        to: normalizeRecipients(mailOptions.to),
+        subject: mailOptions.subject,
+        html: mailOptions.html
+      }),
+      signal: controller.signal
+    });
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      return {
+        success: false,
+        error: `Resend request failed (${response.status}): ${formatProviderError(payload)}`
+      };
+    }
+
+    return {
+      success: true,
+      messageId: payload?.id || payload?.data?.id || null
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.name === 'AbortError'
+        ? `Resend request timed out after ${resendTimeoutMs}ms`
+        : error.message
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+const sendViaSmtp = async (mailOptions) => {
+  if (!transporter) {
+    return {
+      success: false,
+      error: 'SMTP is not configured. Set EMAIL_USER and EMAIL_PASSWORD.'
+    };
+  }
+
+  try {
+    const info = await transporter.sendMail(mailOptions);
+    return { success: true, messageId: info.messageId };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+};
+
+const sendMail = async (mailOptions) => {
+  if (emailProvider === 'resend') {
+    return sendViaResend(mailOptions);
+  }
+
+  if (emailProvider === 'smtp') {
+    return sendViaSmtp(mailOptions);
+  }
+
+  if (emailProvider === 'auto') {
+    if (resendApiKey) {
+      const resendResult = await sendViaResend(mailOptions);
+      if (resendResult.success) return resendResult;
+      console.warn('Resend failed in auto mode, falling back to SMTP:', resendResult.error);
+    }
+    return sendViaSmtp(mailOptions);
+  }
+
+  console.warn(`Unknown EMAIL_PROVIDER "${emailProvider}". Falling back to SMTP.`);
+  return sendViaSmtp(mailOptions);
+};
+
+const wrapEmail = (title, body) => `
+  <!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>${title}</title>
+  </head>
+  <body style="font-family: Arial, sans-serif; background:#f5f5f5; margin:0; padding:24px; color:#111827;">
+    <div style="max-width:620px; margin:0 auto; background:#ffffff; border-radius:10px; border:1px solid #e5e7eb; overflow:hidden;">
+      <div style="background:#1d4ed8; color:#ffffff; padding:20px 24px;">
+        <h1 style="margin:0; font-size:22px;">KovaPage</h1>
+      </div>
+      <div style="padding:24px; line-height:1.6;">
+        ${body}
+      </div>
+    </div>
+  </body>
+  </html>
+`;
+
+console.log('Configuring email service...');
+console.log('Email provider:', emailProvider);
+console.log('Email sender:', resolvedFromAddress);
+
+if (transporter) {
+  console.log('SMTP transport:', {
+    host: transporterConfig.host,
+    port: transporterConfig.port,
+    secure: transporterConfig.secure,
+    requireTLS: transporterConfig.requireTLS,
+    connectionTimeout: transporterConfig.connectionTimeout,
+    greetingTimeout: transporterConfig.greetingTimeout,
+    socketTimeout: transporterConfig.socketTimeout,
+    hasPassword: Boolean(resolvedEmailPassword)
+  });
+}
+
+if (emailProvider === 'smtp' || emailProvider === 'auto') {
+  if (transporter) {
+    transporter.verify((error) => {
+      if (error) {
+        console.log('Email configuration error:', error.message);
+      } else {
+        console.log('SMTP server is ready');
+      }
+    });
+  } else {
+    console.log('SMTP verify skipped: credentials are not configured.');
+  }
+}
+
 const sendOTPEmail = async (email, otp, userName = 'User') => {
   try {
     const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+      from: resolvedFromAddress,
       to: email,
       subject: 'Your KovaPage Verification Code',
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
-                .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-                .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; color: white; }
-                .content { padding: 40px; }
-                .otp-code { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 25px; text-align: center; border-radius: 10px; margin: 25px 0; font-size: 32px; font-weight: bold; letter-spacing: 8px; }
-                .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px; }
-                .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>KovaPage</h1>
-                    <p>Audit App Verification</p>
-                </div>
-                <div class="content">
-                    <h2>Hello ${userName},</h2>
-                    <p>Thank you for registering with KovaPage Audit App. Use the verification code below to complete your registration:</p>
-                    
-                    <div class="otp-code">${otp}</div>
-                    
-                    <div class="warning">
-                        <strong> Important Security Notice:</strong><br>
-                        This code will expire in 10 minutes. Do not share this code with anyone.
-                    </div>
-                    
-                    <p>If you didn't request this code, please ignore this email.</p>
-                </div>
-                <div class="footer">
-                    <p>&copy; 2024 KovaPage Audit App. All rights reserved.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-      `
+      html: wrapEmail(
+        'KovaPage Verification Code',
+        `
+          <h2 style="margin-top:0;">Hello ${userName},</h2>
+          <p>Use this one-time verification code to continue:</p>
+          <div style="font-size:32px; letter-spacing:6px; font-weight:bold; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; padding:14px 16px; border-radius:8px; display:inline-block;">${otp}</div>
+          <p style="margin-top:20px;">This code expires in 10 minutes. Do not share it with anyone.</p>
+        `
+      )
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`REAL OTP email sent to ${email}`);
-    console.log(`Message ID: ${info.messageId}`);
-    return { success: true, messageId: info.messageId };
+    const result = await sendMail(mailOptions);
+    if (!result.success) {
+      console.error(`Failed to send OTP to ${email}:`, result.error);
+      return { success: false, error: result.error };
+    }
+
+    console.log(`OTP email sent to ${email}`);
+    console.log(`Message ID: ${result.messageId}`);
+    return { success: true, messageId: result.messageId };
   } catch (error) {
-    console.error(` Failed to send OTP to ${email}:`, error.message);
-    return { 
-      success: false, 
+    console.error(`Failed to send OTP to ${email}:`, error.message);
+    return {
+      success: false,
       error: error.message
     };
   }
 };
 
-// Sends welcome email after successful verification
 const sendWelcomeEmail = async (email, userName = 'User') => {
   try {
     const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+      from: resolvedFromAddress,
       to: email,
-      subject: 'Welcome to KovaPage - Email Verified Successfully! 🎉',
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body { font-family: 'Arial', sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin: 0; padding: 20px; }
-                .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
-                .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px; text-align: center; color: white; }
-                .content { padding: 50px 40px; text-align: center; }
-                .welcome-icon { font-size: 80px; margin-bottom: 20px; }
-                .welcome-text { font-size: 28px; color: #333; margin-bottom: 20px; font-weight: bold; }
-                .success-message { background: #d4edda; color: #155724; padding: 20px; border-radius: 10px; margin: 25px 0; border: 2px solid #c3e6cb; }
-                .features { text-align: left; margin: 30px 0; }
-                .feature-item { margin: 15px 0; padding-left: 25px; position: relative; }
-                .feature-item:before { content: "✓"; color: #28a745; font-weight: bold; position: absolute; left: 0; }
-                .cta-button { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 15px 30px; text-decoration: none; border-radius: 25px; display: inline-block; margin: 20px 0; font-weight: bold; }
-                .footer { background: #f8f9fa; padding: 25px; text-align: center; color: #666; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1 style="margin: 0; font-size: 36px;">KovaPage</h1>
-                    <p style="margin: 10px 0 0 0; opacity: 0.9; font-size: 18px;">Audit App</p>
-                </div>
-                <div class="content">
-                
-                    <div class="welcome-text">Welcome to KovaPage, ${userName}!</div>
-                    
-                    <div class="success-message">
-                        <strong>Email Verified Successfully!</strong><br>
-                        Your email address has been verified and your account is now active.
-                    </div>
-                    
-                    <p style="color: #666; line-height: 1.6; font-size: 16px;">
-                        Thank you for joining KovaPage Audit App. You're now ready to start managing your audits efficiently and securely.
-                    </p>
-                    
-                    <div class="features">
-                        <div class="feature-item">Secure audit management and tracking</div>
-                        <div class="feature-item">Real-time collaboration with your team</div>
-                        <div class="feature-item">Advanced reporting and analytics</div>
-                        <div class="feature-item">Bank-level security for your data</div>
-                    </div>
-                    
-                    <a href="#" class="cta-button">Get Started with KovaPage</a>
-                    
-                    <p style="color: #888; font-size: 14px; margin-top: 30px;">
-                        Need help? Contact our support team at support@kovapage.com
-                    </p>
-                </div>
-                <div class="footer">
-                    <p style="margin: 0;">&copy; 2024 KovaPage Audit App. All rights reserved.</p>
-                    <p style="margin: 5px 0 0 0; font-size: 12px; color: #999;">
-                        Securing your audit processes with cutting-edge technology
-                    </p>
-                </div>
-            </div>
-        </body>
-        </html>
-      `
+      subject: 'Welcome to KovaPage',
+      html: wrapEmail(
+        'Welcome to KovaPage',
+        `
+          <h2 style="margin-top:0;">Welcome, ${userName}.</h2>
+          <p>Your email address has been verified and your account is active.</p>
+          <p>You can now start using KovaPage Audit App.</p>
+        `
+      )
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log(` Welcome email sent to ${email}`);
-    console.log(`Welcome Message ID: ${info.messageId}`);
-    return { success: true, messageId: info.messageId };
+    const result = await sendMail(mailOptions);
+    if (!result.success) {
+      console.error(`Failed to send welcome email to ${email}:`, result.error);
+      return { success: false, error: result.error };
+    }
+
+    console.log(`Welcome email sent to ${email}`);
+    console.log(`Welcome Message ID: ${result.messageId}`);
+    return { success: true, messageId: result.messageId };
   } catch (error) {
-    console.error(` Failed to send welcome email to ${email}:`, error.message);
-    return { 
-      success: false, 
+    console.error(`Failed to send welcome email to ${email}:`, error.message);
+    return {
+      success: false,
       error: error.message
     };
   }
 };
 
-// Password reset email function
 const sendPasswordResetEmail = async (email, resetToken, userName = 'User') => {
   try {
     const mailOptions = {
-      from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`,
+      from: resolvedFromAddress,
       to: email,
       subject: 'Reset Your KovaPage Password',
-      html: `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body { font-family: Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 20px; }
-                .container { max-width: 600px; margin: 0 auto; background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-                .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; color: white; }
-                .content { padding: 40px; }
-                .reset-code { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 25px; text-align: center; border-radius: 10px; margin: 25px 0; font-size: 32px; font-weight: bold; letter-spacing: 8px; }
-                .footer { background: #f8f9fa; padding: 20px; text-align: center; color: #666; font-size: 12px; }
-                .warning { background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0; }
-                .button { background: #2563eb; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 10px 0; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>KovaPage</h1>
-                    <p>Password Reset Request</p>
-                </div>
-                <div class="content">
-                    <h2>Hello ${userName},</h2>
-                    <p>We received a request to reset your password for your KovaPage account. Use the reset code below:</p>
-                    
-                    <div class="reset-code">${resetToken}</div>
-                    
-                    <div class="warning">
-                        <strong>Important Security Notice:</strong><br>
-                        This reset code will expire in 10 minutes. Do not share this code with anyone.
-                    </div>
-                    
-                    <p>If you didn't request a password reset, please ignore this email and your password will remain unchanged.</p>
-                    
-                    <p>Need help? Contact our support team at support@kovapage.com</p>
-                </div>
-                <div class="footer">
-                    <p>&copy; 2026 KovaPage Audit App. All rights reserved, hopefully.</p>
-                </div>
-            </div>
-        </body>
-        </html>
-      `
+      html: wrapEmail(
+        'Reset Your Password',
+        `
+          <h2 style="margin-top:0;">Hello ${userName},</h2>
+          <p>Use this code to reset your password:</p>
+          <div style="font-size:32px; letter-spacing:6px; font-weight:bold; background:#eff6ff; color:#1d4ed8; border:1px solid #bfdbfe; padding:14px 16px; border-radius:8px; display:inline-block;">${resetToken}</div>
+          <p style="margin-top:20px;">This code expires in 10 minutes. If you did not request this, you can ignore this email.</p>
+        `
+      )
     };
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`🔐 Password reset email sent to ${email}`);
-    console.log(`Reset Message ID: ${info.messageId}`);
-    return { success: true, messageId: info.messageId };
+    const result = await sendMail(mailOptions);
+    if (!result.success) {
+      console.error(`Failed to send password reset email to ${email}:`, result.error);
+      return { success: false, error: result.error };
+    }
+
+    console.log(`Password reset email sent to ${email}`);
+    console.log(`Reset Message ID: ${result.messageId}`);
+    return { success: true, messageId: result.messageId };
   } catch (error) {
-    console.error(` Failed to send password reset email to ${email}:`, error.message);
-    return { 
-      success: false, 
+    console.error(`Failed to send password reset email to ${email}:`, error.message);
+    return {
+      success: false,
       error: error.message
     };
   }
 };
 
-// Make sure ALL functions are exported
 module.exports = {
   sendOTPEmail,
   sendWelcomeEmail,
   sendPasswordResetEmail
 };
-
