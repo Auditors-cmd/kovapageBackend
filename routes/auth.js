@@ -519,10 +519,16 @@ router.post('/email/login', async (req, res) => {
     const emailResult = await sendOTPEmail(normalizedEmail, otp, user.name);
 
     if (!emailResult.success) {
-      return res.status(500).json({
+      const errorPayload = {
         success: false,
         message: 'Failed to send verification email. Please try again.'
-      });
+      };
+
+      if (process.env.NODE_ENV === 'development') {
+        errorPayload.error = emailResult.error;
+      }
+
+      return res.status(500).json(errorPayload);
     }
 
     res.json({

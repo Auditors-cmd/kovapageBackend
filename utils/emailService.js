@@ -27,15 +27,24 @@ const emailProvider = String(
 const resendApiKey = String(process.env.RESEND_API_KEY || '').trim();
 const resendApiUrl = process.env.RESEND_API_URL || 'https://api.resend.com/emails';
 const resendTimeoutMs = resolveNumber(process.env.RESEND_TIMEOUT_MS || 20000, 20000);
+const defaultResendFrom = process.env.RESEND_FROM || 'KovaPage <onboarding@resend.dev>';
 
-const resolvedFromAddress =
-  process.env.EMAIL_FROM ||
-  (
-    process.env.EMAIL_FROM_NAME && process.env.EMAIL_USER
-      ? `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`
-      : process.env.EMAIL_USER
-  ) ||
-  'KovaPage <no-reply@kovapage.com>';
+const resolveFromAddress = () => {
+  if (process.env.EMAIL_FROM) return process.env.EMAIL_FROM;
+
+  // For Resend, do not default to EMAIL_USER (often a Gmail address that Resend rejects).
+  if (emailProvider === 'resend' || (emailProvider === 'auto' && resendApiKey)) {
+    return defaultResendFrom;
+  }
+
+  if (process.env.EMAIL_FROM_NAME && process.env.EMAIL_USER) {
+    return `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_USER}>`;
+  }
+
+  return process.env.EMAIL_USER || 'KovaPage <no-reply@kovapage.com>';
+};
+
+const resolvedFromAddress = resolveFromAddress();
 
 const transporterConfig = {
   host: process.env.EMAIL_HOST || 'smtp.gmail.com',
