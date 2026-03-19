@@ -591,7 +591,10 @@ router.post('/email/verify-login', async (req, res) => {
       });
     }
     
-    await user.update({ lastLogin: new Date() });
+    await user.update({
+      lastLogin: new Date(),
+      isEmailVerified: true
+    });
     const token = generateToken(user.id);
 
     res.json({
