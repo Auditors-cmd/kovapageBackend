@@ -12,73 +12,98 @@ const envCandidates = [
 const envPath = envCandidates.find((candidate) => fs.existsSync(candidate));
 dotenv.config(envPath ? { path: envPath } : undefined);
 
+const parseBoolean = (value, fallback = false) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  return String(value).trim().toLowerCase() === 'true';
+};
+
+const shouldUseSsl = process.env.DB_SSL !== undefined
+  ? parseBoolean(process.env.DB_SSL, false)
+  : Boolean(process.env.DATABASE_URL);
+
+const rejectUnauthorized = parseBoolean(process.env.DB_SSL_REJECT_UNAUTHORIZED, false);
+
+const buildSslConfig = () => {
+  if (!shouldUseSsl) return undefined;
+
+  const ssl = {
+    require: true,
+    rejectUnauthorized
+  };
+
+  if (process.env.DB_SSL_CA) {
+    ssl.ca = String(process.env.DB_SSL_CA).replace(/\\n/g, '\n');
+  }
+
+  return ssl;
+};
+
+const sslConfig = buildSslConfig();
+
+const baseSequelizeConfig = {
+  dialect: 'postgres',
+  logging: process.env.NODE_ENV === 'development' ? console.log : false,
+  dialectOptions: {
+    ...(sslConfig ? { ssl: sslConfig } : {}),
+    ...(process.env.DB_SSL_MODE ? { sslmode: process.env.DB_SSL_MODE } : {})
+  },
+  pool: {
+    max: 5,
+    min: 0,
+    acquire: 30000,
+    idle: 10000
+  }
+};
+
 let sequelize;
 
-// Check if we should use a DATABASE_URL (common in production like Render)
 if (process.env.DATABASE_URL) {
   let connectionUrl = process.env.DATABASE_URL;
 
   try {
     const parsedUrl = new URL(process.env.DATABASE_URL);
-    const sslMode = parsedUrl.searchParams.get('sslmode');
 
-    // Managed providers (Render/Supabase poolers) often require no-verify unless a CA bundle is configured.
-    if (!sslMode || sslMode === 'require') {
-      parsedUrl.searchParams.set('sslmode', process.env.DB_SSL_MODE || 'no-verify');
-    }
+    // Remove SSL params from URL so Sequelize/pg dialectOptions controls SSL consistently.
+    parsedUrl.searchParams.delete('sslmode');
+    parsedUrl.searchParams.delete('sslcert');
+    parsedUrl.searchParams.delete('sslkey');
+    parsedUrl.searchParams.delete('sslrootcert');
 
     connectionUrl = parsedUrl.toString();
   } catch (error) {
-    console.warn('⚠️ DATABASE_URL could not be parsed, using original value.');
+    console.warn('DATABASE_URL could not be parsed, using original value.');
   }
 
-  // Use the DATABASE_URL for connection
-  sequelize = new Sequelize(connectionUrl, {
-    dialect: 'postgres',
-    logging: process.env.NODE_ENV === 'development' ? console.log : false,
-    dialectOptions: {
-      ssl: {
-        require: true,
-        rejectUnauthorized: false // <<< This is crucial for Render's PostgreSQL
-      }
-    },
-    pool: {
-      max: 5,
-      min: 0,
-      acquire: 30000,
-      idle: 10000
-    }
-  });
-  console.log('🔌 Configuring Sequelize using DATABASE_URL with SSL');
+  sequelize = new Sequelize(connectionUrl, baseSequelizeConfig);
+  console.log('Configuring Sequelize using DATABASE_URL');
 } else {
-  // Fallback to individual environment variables for local development
   sequelize = new Sequelize(
     process.env.DB_NAME || 'kovapage',
     process.env.DB_USER || 'postgres',
     process.env.DB_PASSWORD || 'password',
     {
       host: process.env.DB_HOST || 'localhost',
-      port: process.env.DB_PORT || 5432,
-      dialect: 'postgres',
-      logging: process.env.NODE_ENV === 'development' ? console.log : false,
-      pool: {
-        max: 5,
-        min: 0,
-        acquire: 30000,
-        idle: 10000
-      }
+      port: Number(process.env.DB_PORT || 5432),
+      ...baseSequelizeConfig
     }
   );
-  console.log('🔌 Configuring Sequelize using individual DB_* variables');
+  console.log('Configuring Sequelize using individual DB_* variables');
 }
 
-// Test connection
+if (shouldUseSsl) {
+  console.log('PostgreSQL SSL enabled:', {
+    rejectUnauthorized,
+    hasCustomCa: Boolean(process.env.DB_SSL_CA)
+  });
+}
+
 const testConnection = async () => {
   try {
     await sequelize.authenticate();
-    console.log('✅ PostgreSQL connected successfully');
+    console.log('PostgreSQL connected successfully');
   } catch (error) {
-    console.error('❌ Unable to connect to PostgreSQL:', error);
+    console.error('Unable to connect to PostgreSQL:', error);
+    throw error;
   }
 };
 
