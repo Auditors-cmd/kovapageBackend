@@ -205,12 +205,9 @@ Complete audit management system with 8 specialized user roles, OTP and password
             type: 'object',
             properties: {
               currentRole: { $ref: '#/components/schemas/UserRole' },
-              needsSelection: { type: 'boolean', example: true },
+              needsSelection: { type: 'boolean', example: false },
               roleSelectedAt: { type: 'string', format: 'date-time', nullable: true },
-              availableRoles: {
-                type: 'array',
-                items: { $ref: '#/components/schemas/UserRole' }
-              },
+              assignmentManagedBy: { type: 'string', example: 'admin' },
               dashboard: { type: 'string', example: '/qa/dashboard' },
               profilePhotoUrl: { type: 'string', example: 'https://res.cloudinary.com/.../profile.jpg' }
             }
@@ -410,12 +407,6 @@ Complete audit management system with 8 specialized user roles, OTP and password
             format: 'email',
             example: 'jane.manager@company.com',
             description: 'User email address'
-          },
-          password: {
-            type: 'string',
-            format: 'password',
-            example: 'password123',
-            description: 'Optional password - if not provided, OTP auth will be used (min 8 chars if provided)'
           },
           role: {
             $ref: '#/components/schemas/UserRole'
@@ -1353,7 +1344,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/update-role': {
       put: {
         summary: 'Update User Role',
-        description: 'Update user role after registration',
+        description: 'Self-service role updates are disabled. Role assignment is admin-managed.',
         tags: ['Role Management'],
         security: [{ bearerAuth: [] }],
         requestBody: {
@@ -1367,27 +1358,15 @@ Complete audit management system with 8 specialized user roles, OTP and password
           }
         },
         responses: {
-          '200': {
-            description: 'Role updated successfully',
+          '403': {
+            description: 'Role assignment is managed by administrators',
             content: {
               'application/json': {
                 schema: {
                   type: 'object',
                   properties: {
-                    success: { type: 'boolean', example: true },
-                    message: { type: 'string' },
-                    data: {
-                      type: 'object',
-                      properties: {
-                        id: { type: 'string', format: 'uuid' },
-                        name: { type: 'string' },
-                        email: { type: 'string' },
-                        role: { $ref: '#/components/schemas/UserRole' },
-                        profilePhotoUrl: { type: 'string' },
-                        dashboard: { type: 'string' },
-                        welcomeMessage: { type: 'string' }
-                      }
-                    }
+                    success: { type: 'boolean', example: false },
+                    message: { type: 'string', example: 'Role assignment is managed by administrators.' }
                   }
                 }
               }
@@ -1403,7 +1382,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/role-status': {
       get: {
         summary: 'Check Role Status',
-        description: 'Check if user needs to select a role',
+        description: 'Returns current role details and indicates that role assignment is admin-managed.',
         tags: ['Role Management'],
         security: [{ bearerAuth: [] }],
         responses: {
@@ -2975,7 +2954,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/admin/create-user': {
       post: {
         summary: 'Create User with Role (Admin Only)',
-        description: 'Create a new user with specific role. Password must be at least 8 characters if provided.',
+        description: 'Create a new OTP-based user with a specific role. Password is not accepted by this endpoint.',
         tags: ['Admin'],
         security: [{ bearerAuth: [] }],
         requestBody: {
@@ -3228,6 +3207,8 @@ Complete audit management system with 8 specialized user roles, OTP and password
               schema: {
                 type: 'object',
                 properties: {
+                  name: { type: 'string' },
+                  email: { type: 'string', format: 'email' },
                   role: { $ref: '#/components/schemas/UserRole' },
                   department: { type: 'string' },
                   employeeId: { type: 'string' },
@@ -3263,7 +3244,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
       },
       delete: {
         summary: 'Deactivate User (Admin Only)',
-        description: 'Deactivate a user account',
+        description: 'Soft-deactivate a user account by setting isActive=false',
         tags: ['Admin'],
         security: [{ bearerAuth: [] }],
         parameters: [
@@ -3275,6 +3256,7 @@ Complete audit management system with 8 specialized user roles, OTP and password
           }
         ],
         responses: {
+          '400': { $ref: '#/components/responses/BadRequest' },
           '200': {
             description: 'User deactivated successfully',
             content: {
@@ -3300,9 +3282,17 @@ Complete audit management system with 8 specialized user roles, OTP and password
     '/api/auth/admin/org-chart': {
       get: {
         summary: 'Get Organization Chart',
-        description: 'Get hierarchical organization structure based on reportsTo relationships',
+        description: 'Get hierarchical organization structure based on reportsTo relationships. Active users only by default.',
         tags: ['Admin'],
         security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'includeInactive',
+            in: 'query',
+            description: 'Include inactive users in org chart (default: false)',
+            schema: { type: 'boolean', default: false }
+          }
+        ],
         responses: {
           '200': {
             description: 'Organization chart retrieved',
@@ -3312,6 +3302,13 @@ Complete audit management system with 8 specialized user roles, OTP and password
                   type: 'object',
                   properties: {
                     success: { type: 'boolean', example: true },
+                    meta: {
+                      type: 'object',
+                      properties: {
+                        includeInactive: { type: 'boolean', example: false },
+                        totalUsers: { type: 'integer', example: 12 }
+                      }
+                    },
                     data: {
                       type: 'array',
                       items: {
@@ -3319,9 +3316,11 @@ Complete audit management system with 8 specialized user roles, OTP and password
                         properties: {
                           id: { type: 'string', format: 'uuid' },
                           name: { type: 'string' },
+                          email: { type: 'string', format: 'email' },
                           role: { $ref: '#/components/schemas/UserRole' },
                           department: { type: 'string' },
                           profilePhotoUrl: { type: 'string' },
+                          isActive: { type: 'boolean' },
                           subordinates: {
                             type: 'array',
                             items: { type: 'object' }

@@ -8,15 +8,10 @@ const User = require('../models/User');
 const { sendOTPEmail, sendWelcomeEmail, sendPasswordResetEmail } = require('../utils/emailService');
 const { createOTP, verifyOTP } = require('../utils/otpService');
 const { protect } = require('../middleware/auth');
-const { hasRoleLevel } = require('../middleware/roles');
+const { hasRoleLevel, roleHierarchy } = require('../middleware/roles');
 const { uploadProfilePhoto, deleteFromCloudinary } = require('../middleware/upload'); // Updated import
 
 const router = express.Router();
-
-// Generate JWT Token
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET || 'dev-secret-key', { expiresIn: '30d' });
-};
 
 // Email validation function
 const isValidEmail = (email) => {
@@ -29,6 +24,36 @@ const VALID_ROLES = [
   'auditee', 'implementation_officer', 'team_member', 'team_lead',
   'quality_assurance', 'unit_head', 'bac_secretariat', 'chief_audit_executive'
 ];
+
+const SELF_REGISTRATION_ENABLED = process.env.ALLOW_SELF_REGISTRATION === 'true';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
+
+const resolveJwtSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  const weakSecret = !secret || secret === 'dev-secret-key' || String(secret).includes('change_this_in_production');
+
+  if (process.env.NODE_ENV === 'production' && weakSecret) {
+    throw new Error('JWT_SECRET is not configured securely for production');
+  }
+
+  return secret || 'dev-secret-key';
+};
+
+// Generate JWT Token
+const generateToken = (id) => {
+  return jwt.sign({ id }, resolveJwtSecret(), { expiresIn: JWT_EXPIRES_IN });
+};
+
+const normalizeEmail = (email) => String(email || '').toLowerCase().trim();
+
+const canAssignRole = (actorRole, roleToAssign) => {
+  if (!VALID_ROLES.includes(roleToAssign)) return false;
+  if (actorRole === 'chief_audit_executive') return true;
+  if (actorRole === 'bac_secretariat') {
+    return (roleHierarchy[roleToAssign] || 0) < (roleHierarchy.bac_secretariat || 0);
+  }
+  return false;
+};
 
 // Dashboard mapping based on user role
 const getDashboardByRole = (role) => {
@@ -69,6 +94,13 @@ const getWelcomeMessage = (role, name) => {
 // @access  Public
 router.post('/register', uploadProfilePhoto.single('profilePhoto'), async (req, res) => {
   try {
+    if (!SELF_REGISTRATION_ENABLED) {
+      return res.status(403).json({
+        success: false,
+        message: 'Self-registration is disabled. Contact an administrator to create your account.'
+      });
+    }
+
     const { name, email, password } = req.body;
     const profilePhoto = req.file;
 
@@ -98,7 +130,7 @@ router.post('/register', uploadProfilePhoto.single('profilePhoto'), async (req, 
 
     // Check if user already exists
     const existingUser = await User.findOne({
-      where: { email: email.toLowerCase() }
+      where: { email: normalizeEmail(email) }
     });
 
     if (existingUser) {
@@ -115,7 +147,7 @@ router.post('/register', uploadProfilePhoto.single('profilePhoto'), async (req, 
     // Prepare user data
     const userData = {
       name: name.trim(),
-      email: email.toLowerCase(),
+      email: normalizeEmail(email),
       password,
       authMethod: 'password',
       role: 'auditee',
@@ -324,43 +356,9 @@ router.delete('/delete-photo', protect, async (req, res) => {
 // @access  Private
 router.put('/update-role', protect, async (req, res) => {
   try {
-    const { role } = req.body;
-    const userId = req.user.id;
-
-    if (!VALID_ROLES.includes(role)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid role. Please select a valid role from the options.'
-      });
-    }
-
-    const user = await User.findByPk(userId);
-    
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found'
-      });
-    }
-
-    await user.update({ 
-      role,
-      roleSelectedAt: new Date() 
-    });
-
-    res.json({
-      success: true,
-      message: `Role updated successfully to ${role.replace(/_/g, ' ')}`,
-      data: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        profilePhotoUrl: user.profilePhotoUrl,
-        roleSelectedAt: user.roleSelectedAt,
-        dashboard: getDashboardByRole(role),
-        welcomeMessage: getWelcomeMessage(role, user.name)
-      }
+    res.status(403).json({
+      success: false,
+      message: 'Role assignment is managed by administrators.'
     });
 
   } catch (error) {
@@ -378,15 +376,14 @@ router.put('/update-role', protect, async (req, res) => {
 router.get('/role-status', protect, async (req, res) => {
   try {
     const user = req.user;
-    const needsRoleSelection = user.role === 'auditee' && !user.roleSelectedAt;
 
     res.json({
       success: true,
       data: {
         currentRole: user.role,
-        needsSelection: needsRoleSelection,
+        needsSelection: false,
         roleSelectedAt: user.roleSelectedAt,
-        availableRoles: VALID_ROLES,
+        assignmentManagedBy: 'admin',
         dashboard: getDashboardByRole(user.role),
         profilePhotoUrl: user.profilePhotoUrl
       }
@@ -419,9 +416,11 @@ router.post('/forgot-password', async (req, res) => {
       });
     }
 
+    const normalizedEmail = normalizeEmail(email);
+
     const user = await User.findOne({
       where: { 
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         isActive: true
       }
     });
@@ -441,8 +440,8 @@ router.post('/forgot-password', async (req, res) => {
       });
     }
 
-    const resetOTP = createOTP(email);
-    const emailResult = await sendPasswordResetEmail(email, resetOTP, user.name);
+    const resetOTP = await createOTP(normalizedEmail);
+    const emailResult = await sendPasswordResetEmail(normalizedEmail, resetOTP, user.name);
 
     if (!emailResult.success) {
       return res.status(500).json({
@@ -486,7 +485,8 @@ router.post('/reset-password', async (req, res) => {
       });
     }
 
-    const otpVerification = verifyOTP(email, otp);
+    const normalizedEmail = normalizeEmail(email);
+    const otpVerification = await verifyOTP(normalizedEmail, otp);
     if (!otpVerification.isValid) {
       return res.status(400).json({
         success: false,
@@ -496,7 +496,7 @@ router.post('/reset-password', async (req, res) => {
 
     const user = await User.findOne({
       where: { 
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         isActive: true
       }
     });
@@ -533,6 +533,16 @@ router.post('/reset-password', async (req, res) => {
 // @access  Public
 router.post('/email/register', uploadProfilePhoto.single('profilePhoto'), async (req, res) => {
   try {
+    if (!SELF_REGISTRATION_ENABLED) {
+      if (req.file) {
+        await deleteFromCloudinary(req.file.filename).catch(console.warn);
+      }
+      return res.status(403).json({
+        success: false,
+        message: 'Self-registration is disabled. Contact an administrator to create your account.'
+      });
+    }
+
     const { email, name } = req.body;
     const profilePhoto = req.file;
 
@@ -566,8 +576,10 @@ router.post('/email/register', uploadProfilePhoto.single('profilePhoto'), async 
       });
     }
 
+    const normalizedEmail = normalizeEmail(email);
+
     const existingUser = await User.findOne({
-      where: { email: email.toLowerCase() }
+      where: { email: normalizedEmail }
     });
 
     if (existingUser) {
@@ -576,12 +588,12 @@ router.post('/email/register', uploadProfilePhoto.single('profilePhoto'), async 
       }
       return res.status(400).json({
         success: false,
-        message: 'An account with this email already exists'
+        message: 'Unable to process registration request'
       });
     }
 
-    const otp = createOTP(email);
-    const emailResult = await sendOTPEmail(email, otp, name);
+    const otp = await createOTP(normalizedEmail);
+    const emailResult = await sendOTPEmail(normalizedEmail, otp, name);
 
     if (!emailResult.success) {
       if (profilePhoto) {
@@ -589,8 +601,7 @@ router.post('/email/register', uploadProfilePhoto.single('profilePhoto'), async 
       }
       return res.status(500).json({
         success: false,
-        message: 'Failed to send verification email. Please try again.',
-        error: emailResult.error
+        message: 'Failed to send verification email. Please try again.'
       });
     }
 
@@ -600,9 +611,9 @@ router.post('/email/register', uploadProfilePhoto.single('profilePhoto'), async 
 
     res.json({
       success: true,
-      message: `Verification code sent to ${email}`,
+      message: `Verification code sent to ${normalizedEmail}`,
       data: {
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         name: name.trim(),
         hasProfilePhoto: !!profilePhoto,
         photoPublicId: profilePhoto?.filename // Send back so verify endpoint can use it
@@ -642,7 +653,8 @@ router.post('/email/verify', async (req, res) => {
       });
     }
 
-    const otpVerification = verifyOTP(email, otp);
+    const normalizedEmail = normalizeEmail(email);
+    const otpVerification = await verifyOTP(normalizedEmail, otp);
     
     if (!otpVerification.isValid) {
       return res.status(400).json({
@@ -654,7 +666,7 @@ router.post('/email/verify', async (req, res) => {
     // Prepare user data
     const userData = {
       name: name.trim(),
-      email: email.toLowerCase(),
+      email: normalizedEmail,
       isEmailVerified: true,
       authMethod: 'email_otp',
       role: 'auditee',
@@ -675,7 +687,7 @@ router.post('/email/verify', async (req, res) => {
     const token = generateToken(user.id);
 
     // Send welcome email (non-blocking)
-    sendWelcomeEmail(email, name).catch(console.warn);
+    sendWelcomeEmail(normalizedEmail, name).catch(console.warn);
 
     res.status(201).json({
       success: true,
@@ -735,22 +747,27 @@ router.post('/email/login', async (req, res) => {
       });
     }
 
+    const normalizedEmail = normalizeEmail(email);
+
     const user = await User.findOne({
       where: { 
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         isActive: true 
       }
     });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'No account found with this email. Please register first.'
+      return res.json({
+        success: true,
+        message: 'If an account with that email exists, a verification code has been sent',
+        data: {
+          email: normalizedEmail
+        }
       });
     }
 
-    const otp = createOTP(email);
-    const emailResult = await sendOTPEmail(email, otp, user.name);
+    const otp = await createOTP(normalizedEmail);
+    const emailResult = await sendOTPEmail(normalizedEmail, otp, user.name);
 
     if (!emailResult.success) {
       return res.status(500).json({
@@ -761,9 +778,9 @@ router.post('/email/login', async (req, res) => {
 
     res.json({
       success: true,
-      message: `Verification code sent to ${email}`,
+      message: `Verification code sent to ${normalizedEmail}`,
       data: {
-        email: email.toLowerCase(),
+        email: normalizedEmail,
         name: user.name
       }
     });
@@ -798,7 +815,8 @@ router.post('/email/verify-login', async (req, res) => {
       });
     }
 
-    const otpVerification = verifyOTP(email, otp);
+    const normalizedEmail = normalizeEmail(email);
+    const otpVerification = await verifyOTP(normalizedEmail, otp);
     
     if (!otpVerification.isValid) {
       return res.status(400).json({
@@ -808,8 +826,15 @@ router.post('/email/verify-login', async (req, res) => {
     }
 
     const user = await User.findOne({
-      where: { email: email.toLowerCase() }
+      where: { email: normalizedEmail }
     });
+
+    if (!user || !user.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid verification request'
+      });
+    }
     
     await user.update({ lastLogin: new Date() });
     const token = generateToken(user.id);
@@ -915,6 +940,245 @@ router.get('/status', protect, async (req, res) => {
 // ADMIN ROUTES
 // =======================
 
+const hasField = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+const toSafeUser = (user) => {
+  if (!user) return null;
+  const safeUser = user.toJSON ? user.toJSON() : { ...user };
+  delete safeUser.password;
+  return safeUser;
+};
+
+const normalizeNullable = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value === 'string' && value.trim() === '') return null;
+  return value;
+};
+
+const validateReportsTo = async (reportsTo, currentUserId = null) => {
+  const normalizedReportsTo = normalizeNullable(reportsTo);
+
+  if (normalizedReportsTo === undefined) {
+    return { valid: true, value: undefined };
+  }
+
+  if (normalizedReportsTo === null) {
+    return { valid: true, value: null };
+  }
+
+  if (currentUserId && normalizedReportsTo === currentUserId) {
+    return { valid: false, message: 'User cannot report to themselves' };
+  }
+
+  const manager = await User.findByPk(normalizedReportsTo, {
+    attributes: ['id', 'name', 'email', 'role', 'department', 'isActive']
+  });
+
+  if (!manager) {
+    return { valid: false, message: 'reportsTo user not found' };
+  }
+
+  return { valid: true, value: normalizedReportsTo, manager };
+};
+
+const validateUniqueUserFields = async ({ email, employeeId, excludeUserId = null }) => {
+  if (email !== undefined) {
+    const normalizedEmail = email.toLowerCase();
+    const existingEmailUser = await User.findOne({
+      where: {
+        email: normalizedEmail,
+        ...(excludeUserId ? { id: { [Op.ne]: excludeUserId } } : {})
+      },
+      attributes: ['id']
+    });
+
+    if (existingEmailUser) {
+      return { valid: false, message: 'User with this email already exists' };
+    }
+  }
+
+  if (employeeId !== undefined && employeeId !== null && employeeId !== '') {
+    const existingEmployeeUser = await User.findOne({
+      where: {
+        employeeId,
+        ...(excludeUserId ? { id: { [Op.ne]: excludeUserId } } : {})
+      },
+      attributes: ['id']
+    });
+
+    if (existingEmployeeUser) {
+      return { valid: false, message: 'Employee ID already exists' };
+    }
+  }
+
+  return { valid: true };
+};
+
+const wouldCreateCycle = (childId, managerId, parentById) => {
+  const seen = new Set([childId]);
+  let current = managerId;
+
+  while (current) {
+    if (seen.has(current)) return true;
+    seen.add(current);
+    current = parentById.get(current) || null;
+  }
+
+  return false;
+};
+
+const sortOrgNodes = (nodes) => {
+  nodes.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  nodes.forEach((node) => sortOrgNodes(node.subordinates));
+};
+
+const buildOrgChart = (users) => {
+  const nodesById = new Map();
+  const parentById = new Map();
+  const attached = new Set();
+
+  users.forEach((user) => {
+    nodesById.set(user.id, {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      department: user.department,
+      profilePhotoUrl: user.profilePhotoUrl,
+      isActive: user.isActive,
+      subordinates: []
+    });
+    parentById.set(user.id, user.reportsTo || null);
+  });
+
+  users.forEach((user) => {
+    const managerId = parentById.get(user.id);
+    if (!managerId || !nodesById.has(managerId)) return;
+    if (managerId === user.id) return;
+    if (wouldCreateCycle(user.id, managerId, parentById)) return;
+
+    nodesById.get(managerId).subordinates.push(nodesById.get(user.id));
+    attached.add(user.id);
+  });
+
+  const roots = users
+    .filter((user) => !attached.has(user.id))
+    .map((user) => nodesById.get(user.id));
+
+  sortOrgNodes(roots);
+  return roots;
+};
+
+// @desc    Create user with role (Admin only, OTP auth enforced)
+// @route   POST /api/auth/admin/create-user
+// @access  Private (BAC/CAE only)
+router.post('/admin/create-user', protect, hasRoleLevel('bac_secretariat'), async (req, res) => {
+  try {
+    const { name, email, role, password, department, employeeId, reportsTo } = req.body;
+
+    if (!name || !email || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide name, email, and role'
+      });
+    }
+
+    if (hasField(req.body, 'password')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password is not allowed for admin create-user. This endpoint creates OTP-based users only.'
+      });
+    }
+
+    if (typeof name !== 'string' || name.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name must be at least 2 characters'
+      });
+    }
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address'
+      });
+    }
+
+    if (!VALID_ROLES.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid role. Must be one of: ' + VALID_ROLES.join(', ')
+      });
+    }
+
+    if (!canAssignRole(req.user.role, role)) {
+      return res.status(403).json({
+        success: false,
+        message: `You are not allowed to assign the ${role} role`
+      });
+    }
+
+    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmployeeId = normalizeNullable(employeeId);
+
+    const uniqueCheck = await validateUniqueUserFields({
+      email: normalizedEmail,
+      employeeId: normalizedEmployeeId
+    });
+
+    if (!uniqueCheck.valid) {
+      return res.status(400).json({
+        success: false,
+        message: uniqueCheck.message
+      });
+    }
+
+    const reportsToValidation = await validateReportsTo(reportsTo);
+    if (!reportsToValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: reportsToValidation.message
+      });
+    }
+
+    const user = await User.create({
+      name: name.trim(),
+      email: normalizedEmail,
+      role,
+      department: normalizeNullable(department),
+      employeeId: normalizedEmployeeId,
+      reportsTo: reportsToValidation.value !== undefined ? reportsToValidation.value : null,
+      authMethod: 'email_otp',
+      isEmailVerified: false,
+      isActive: true,
+      roleSelectedAt: new Date()
+    });
+
+    sendWelcomeEmail(user.email, user.name).catch(console.warn);
+
+    res.status(201).json({
+      success: true,
+      message: 'User created successfully',
+      data: toSafeUser(user)
+    });
+  } catch (error) {
+    console.error('Admin create user error:', error);
+
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Email or employee ID already exists'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error creating user'
+    });
+  }
+});
+
 // @desc    Get all users (Admin only)
 // @route   GET /api/auth/admin/users
 // @access  Private (BAC/CAE only)
@@ -923,7 +1187,15 @@ router.get('/admin/users', protect, hasRoleLevel('bac_secretariat'), async (req,
     const { role, department, isActive, search } = req.query;
     
     const where = {};
-    if (role) where.role = role;
+    if (role) {
+      if (!VALID_ROLES.includes(role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid role filter'
+        });
+      }
+      where.role = role;
+    }
     if (department) where.department = department;
     if (isActive !== undefined) where.isActive = isActive === 'true';
     if (search) {
@@ -943,7 +1215,7 @@ router.get('/admin/users', protect, hasRoleLevel('bac_secretariat'), async (req,
     res.json({
       success: true,
       count: users.length,
-      data: users
+      data: users.map(toSafeUser)
     });
 
   } catch (error) {
@@ -973,7 +1245,7 @@ router.get('/admin/pending-users', protect, hasRoleLevel('bac_secretariat'), asy
     res.json({
       success: true,
       count: pendingUsers.length,
-      data: pendingUsers
+      data: pendingUsers.map(toSafeUser)
     });
 
   } catch (error) {
@@ -1000,6 +1272,13 @@ router.put('/admin/assign-role/:userId', protect, hasRoleLevel('bac_secretariat'
       });
     }
 
+    if (!canAssignRole(req.user.role, role)) {
+      return res.status(403).json({
+        success: false,
+        message: `You are not allowed to assign the ${role} role`
+      });
+    }
+
     const user = await User.findByPk(userId);
     if (!user) {
       return res.status(404).json({
@@ -1008,18 +1287,44 @@ router.put('/admin/assign-role/:userId', protect, hasRoleLevel('bac_secretariat'
       });
     }
 
-    await user.update({
+    const reportsToValidation = await validateReportsTo(reportsTo, userId);
+    if (!reportsToValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: reportsToValidation.message
+      });
+    }
+
+    const normalizedEmployeeId = normalizeNullable(employeeId);
+    const uniqueCheck = await validateUniqueUserFields({
+      employeeId: normalizedEmployeeId,
+      excludeUserId: userId
+    });
+
+    if (!uniqueCheck.valid) {
+      return res.status(400).json({
+        success: false,
+        message: uniqueCheck.message
+      });
+    }
+
+    const updates = {
       role,
-      department: department || user.department,
-      employeeId: employeeId || user.employeeId,
-      reportsTo: reportsTo || user.reportsTo,
       roleSelectedAt: new Date()
+    };
+
+    if (department !== undefined) updates.department = normalizeNullable(department);
+    if (employeeId !== undefined) updates.employeeId = normalizedEmployeeId;
+    if (reportsToValidation.value !== undefined) updates.reportsTo = reportsToValidation.value;
+
+    await user.update({
+      ...updates
     });
 
     res.json({
       success: true,
       message: `Role ${role} assigned to ${user.name}`,
-      data: user
+      data: toSafeUser(user)
     });
 
   } catch (error) {
@@ -1027,6 +1332,266 @@ router.put('/admin/assign-role/:userId', protect, hasRoleLevel('bac_secretariat'
     res.status(500).json({
       success: false,
       message: 'Error assigning role'
+    });
+  }
+});
+
+// @desc    Get user details (Admin only)
+// @route   GET /api/auth/admin/users/:id
+// @access  Private (BAC/CAE only)
+router.get('/admin/users/:id', protect, hasRoleLevel('bac_secretariat'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const user = await User.findByPk(id, {
+      attributes: { exclude: ['password'] }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const manager = user.reportsTo
+      ? await User.findByPk(user.reportsTo, {
+          attributes: ['id', 'name', 'email', 'role', 'department', 'profilePhotoUrl', 'isActive']
+        })
+      : null;
+
+    const subordinates = await User.findAll({
+      where: { reportsTo: user.id },
+      attributes: ['id', 'name', 'email', 'role', 'department', 'profilePhotoUrl', 'isActive'],
+      order: [['name', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      data: {
+        ...toSafeUser(user),
+        manager: toSafeUser(manager),
+        subordinates: subordinates.map(toSafeUser)
+      }
+    });
+  } catch (error) {
+    console.error('Get user details error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching user details'
+    });
+  }
+});
+
+// @desc    Update user (Admin only)
+// @route   PUT /api/auth/admin/users/:id
+// @access  Private (BAC/CAE only)
+router.put('/admin/users/:id', protect, hasRoleLevel('bac_secretariat'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const allowedFields = ['name', 'email', 'role', 'department', 'employeeId', 'reportsTo', 'isActive'];
+    const hasUpdates = allowedFields.some((field) => hasField(req.body, field));
+
+    if (!hasUpdates) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid fields provided for update'
+      });
+    }
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    const updates = {};
+
+    if (hasField(req.body, 'name')) {
+      if (typeof req.body.name !== 'string' || req.body.name.trim().length < 2) {
+        return res.status(400).json({
+          success: false,
+          message: 'Name must be at least 2 characters'
+        });
+      }
+      updates.name = req.body.name.trim();
+    }
+
+    let normalizedEmail;
+    if (hasField(req.body, 'email')) {
+      if (!isValidEmail(req.body.email)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Please provide a valid email address'
+        });
+      }
+      normalizedEmail = req.body.email.toLowerCase().trim();
+      updates.email = normalizedEmail;
+    }
+
+    if (hasField(req.body, 'role')) {
+      if (!VALID_ROLES.includes(req.body.role)) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid role. Must be one of: ' + VALID_ROLES.join(', ')
+        });
+      }
+      if (!canAssignRole(req.user.role, req.body.role)) {
+        return res.status(403).json({
+          success: false,
+          message: `You are not allowed to assign the ${req.body.role} role`
+        });
+      }
+      updates.role = req.body.role;
+      if (req.body.role !== user.role) {
+        updates.roleSelectedAt = new Date();
+      }
+    }
+
+    const normalizedEmployeeId = hasField(req.body, 'employeeId')
+      ? normalizeNullable(req.body.employeeId)
+      : undefined;
+
+    const uniqueCheck = await validateUniqueUserFields({
+      email: normalizedEmail,
+      employeeId: normalizedEmployeeId,
+      excludeUserId: id
+    });
+
+    if (!uniqueCheck.valid) {
+      return res.status(400).json({
+        success: false,
+        message: uniqueCheck.message
+      });
+    }
+
+    if (hasField(req.body, 'department')) {
+      updates.department = normalizeNullable(req.body.department);
+    }
+
+    if (hasField(req.body, 'employeeId')) {
+      updates.employeeId = normalizedEmployeeId;
+    }
+
+    if (hasField(req.body, 'isActive')) {
+      if (typeof req.body.isActive === 'boolean') {
+        updates.isActive = req.body.isActive;
+      } else if (req.body.isActive === 'true' || req.body.isActive === 'false') {
+        updates.isActive = req.body.isActive === 'true';
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'isActive must be a boolean'
+        });
+      }
+    }
+
+    const reportsToValidation = await validateReportsTo(req.body.reportsTo, id);
+    if (!reportsToValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: reportsToValidation.message
+      });
+    }
+    if (reportsToValidation.value !== undefined) {
+      updates.reportsTo = reportsToValidation.value;
+    }
+
+    await user.update(updates);
+
+    res.json({
+      success: true,
+      message: 'User updated successfully',
+      data: toSafeUser(user)
+    });
+  } catch (error) {
+    console.error('Update user error:', error);
+
+    if (error.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Email or employee ID already exists'
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: 'Error updating user'
+    });
+  }
+});
+
+// @desc    Deactivate user (Admin only)
+// @route   DELETE /api/auth/admin/users/:id
+// @access  Private (BAC/CAE only)
+router.delete('/admin/users/:id', protect, hasRoleLevel('bac_secretariat'), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (req.user.id === id) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot deactivate your own account'
+      });
+    }
+
+    const user = await User.findByPk(id);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+
+    await user.update({ isActive: false });
+
+    res.json({
+      success: true,
+      message: 'User deactivated successfully',
+      data: {
+        id: user.id,
+        isActive: user.isActive
+      }
+    });
+  } catch (error) {
+    console.error('Deactivate user error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error deactivating user'
+    });
+  }
+});
+
+// @desc    Get organization chart
+// @route   GET /api/auth/admin/org-chart
+// @access  Private (BAC/CAE only)
+router.get('/admin/org-chart', protect, hasRoleLevel('bac_secretariat'), async (req, res) => {
+  try {
+    const includeInactive = req.query.includeInactive === 'true';
+
+    const users = await User.findAll({
+      where: includeInactive ? {} : { isActive: true },
+      attributes: ['id', 'name', 'email', 'role', 'department', 'profilePhotoUrl', 'isActive', 'reportsTo'],
+      order: [['name', 'ASC']]
+    });
+
+    const orgChart = buildOrgChart(users);
+
+    res.json({
+      success: true,
+      data: orgChart,
+      meta: {
+        includeInactive,
+        totalUsers: users.length
+      }
+    });
+  } catch (error) {
+    console.error('Org chart error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching organization chart'
     });
   }
 });
