@@ -96,6 +96,10 @@ Complete audit management system with 8 specialized user roles, OTP and password
       description: 'QA dashboard, risk assessment, and audit plan consolidation (Cloudinary storage)'
     },
     {
+      name: 'Unit Head',
+      description: 'Unit head dashboard metrics, actions, and performance trends'
+    },
+    {
       name: 'Admin',
       description: 'Administrative endpoints for user management'
     },
@@ -2085,6 +2089,524 @@ Complete audit management system with 8 specialized user roles, OTP and password
           },
           '401': { $ref: '#/components/responses/Unauthorized' },
           '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/dashboard-data': {
+      get: {
+        summary: 'Get Unit Head Dashboard Data',
+        description: 'Returns unit-scoped summary cards, action counts, menu counts, and chart datasets for the Unit Head dashboard.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'department',
+            in: 'query',
+            required: false,
+            description: 'Optional department override for roles above unit_head',
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Unit head dashboard data retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        scope: {
+                          type: 'object',
+                          properties: {
+                            department: { type: 'string', nullable: true },
+                            scopedByRole: { type: 'boolean' }
+                          }
+                        },
+                        summaryCards: {
+                          type: 'object'
+                        },
+                        actions: {
+                          type: 'object'
+                        },
+                        menuCounts: {
+                          type: 'object'
+                        },
+                        charts: {
+                          type: 'object'
+                        },
+                        statusSummary: {
+                          type: 'object'
+                        },
+                        recent: {
+                          type: 'object'
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/draft-plan-review-data': {
+      get: {
+        summary: 'Get Draft Plan Review Screen Data',
+        description: 'Returns resource/budget summary and system-generated draft plan rows for Unit Head Draft Plan Review screen.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'apmStatus',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['draft', 'pending_approval', 'approved', 'rejected'] }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': { description: 'Draft plan review data retrieved' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/risk-assessments': {
+      get: {
+        summary: 'List Unit Risk Assessments',
+        description: 'Returns unit risk rows for score finalization table (Risk Assessment screen).',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'includeSubmitted',
+            in: 'query',
+            required: false,
+            schema: { type: 'boolean', example: false }
+          },
+          {
+            name: 'status',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'reviewed'] }
+          },
+          {
+            name: 'search',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': { description: 'Risk rows retrieved' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/risk-assessments/{id}/finalization': {
+      put: {
+        summary: 'Update Risk Finalization Row',
+        description: 'Updates one row in the Unit Head risk finalization table.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  unitName: { type: 'string' },
+                  retailOperations: { type: 'string' },
+                  branchAudit: { type: 'string' },
+                  operationalRiskScoreY: { type: 'number', minimum: 0, maximum: 100 },
+                  riskRating: { type: 'string', enum: ['Very High', 'High', 'Medium', 'Low', 'Very Low'] },
+                  currentAuditScore: { type: 'number', minimum: 0, maximum: 100 },
+                  currentCycleTag: { type: 'string', example: 'AUTO 2026 Q1' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Risk finalization row updated' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/risk-assessments/save-draft': {
+      post: {
+        summary: 'Save Risk Finalization Draft',
+        description: 'Bulk save risk finalization rows as draft.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['rows'],
+                properties: {
+                  notes: { type: 'string' },
+                  rows: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      required: ['id'],
+                      properties: {
+                        id: { type: 'string', format: 'uuid' },
+                        unitName: { type: 'string' },
+                        retailOperations: { type: 'string' },
+                        branchAudit: { type: 'string' },
+                        operationalRiskScoreY: { type: 'number' },
+                        riskRating: { type: 'string' },
+                        currentAuditScore: { type: 'number' },
+                        currentCycleTag: { type: 'string' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Draft saved successfully' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/risk-assessments/submit-to-qa': {
+      post: {
+        summary: 'Submit Finalized Risks to QA',
+        description: 'Bulk submit finalized unit risk rows to QA.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  assessmentIds: {
+                    type: 'array',
+                    items: { type: 'string', format: 'uuid' }
+                  },
+                  notes: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Risk rows submitted to QA' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/apm': {
+      get: {
+        summary: 'List APMs',
+        description: 'Get Audit Program Memorandums scoped to the unit head department.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'apmStatus',
+            in: 'query',
+            schema: { type: 'string', enum: ['draft', 'pending_approval', 'approved', 'rejected'] }
+          },
+          {
+            name: 'status',
+            in: 'query',
+            schema: { type: 'string', enum: ['draft', 'under_review', 'approved', 'consolidated', 'implemented'] }
+          }
+        ],
+        responses: {
+          '200': { description: 'APM list retrieved' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      },
+      post: {
+        summary: 'Create New APM',
+        description: 'Create a new audit program memorandum draft, with optional immediate submission for approval.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['title'],
+                properties: {
+                  title: { type: 'string', example: 'Q2 Operational Audit APM' },
+                  description: { type: 'string' },
+                  department: { type: 'string', description: 'Optional for roles above unit_head' },
+                  planNumber: { type: 'string' },
+                  auditPeriod: { type: 'string', example: 'Q2 2026' },
+                  startDate: { type: 'string', format: 'date-time' },
+                  endDate: { type: 'string', format: 'date-time' },
+                  budget: { type: 'number' },
+                  resourceHours: { type: 'integer' },
+                  auditAreas: { type: 'array', items: { type: 'string' } },
+                  riskAssessmentId: { type: 'string', format: 'uuid' },
+                  teamLeadId: { type: 'string', format: 'uuid' },
+                  teamMemberIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+                  objectives: { type: 'array', items: { type: 'string' } },
+                  scope: { type: 'string' },
+                  deliverables: { type: 'array', items: { type: 'string' } },
+                  notes: { type: 'string' },
+                  submitForApproval: { type: 'boolean', example: false }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '201': { description: 'APM created successfully' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/apm/{id}': {
+      get: {
+        summary: 'Get APM Details',
+        description: 'Get full details of a single audit program memorandum.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        responses: {
+          '200': { description: 'APM retrieved' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      },
+      put: {
+        summary: 'Update APM Draft',
+        description: 'Update APM details while it is not pending approval.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string' },
+                  description: { type: 'string' },
+                  auditPeriod: { type: 'string' },
+                  startDate: { type: 'string', format: 'date-time' },
+                  endDate: { type: 'string', format: 'date-time' },
+                  budget: { type: 'number' },
+                  resourceHours: { type: 'integer' },
+                  auditAreas: { type: 'array', items: { type: 'string' } },
+                  riskAssessmentId: { type: 'string', format: 'uuid' },
+                  teamLeadId: { type: 'string', format: 'uuid' },
+                  teamMemberIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+                  objectives: { type: 'array', items: { type: 'string' } },
+                  scope: { type: 'string' },
+                  deliverables: { type: 'array', items: { type: 'string' } },
+                  notes: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'APM updated successfully' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/apm/{id}/submit': {
+      post: {
+        summary: 'Submit APM for Approval',
+        description: 'Marks an APM as pending approval and moves plan status to under_review.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  notes: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'APM submitted for approval' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/apm/{id}/approve': {
+      post: {
+        summary: 'Approve APM',
+        description: 'Approves a draft/pending APM and submits it to Quality Assurance for consolidation.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  notes: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'APM approved and submitted to QA for consolidation' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/apm/{id}/reject': {
+      post: {
+        summary: 'Reject APM',
+        description: 'Rejects an APM that is currently pending approval and returns it to draft.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['reason'],
+                properties: {
+                  reason: { type: 'string', example: 'Scope needs to be narrowed to Q2' },
+                  notes: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'APM rejected and returned to draft' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
           '500': { $ref: '#/components/responses/ServerError' }
         }
       }

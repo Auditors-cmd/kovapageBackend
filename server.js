@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const qaRoutes = require('./routes/qualityAssurance');
+const unitHeadRoutes = require('./routes/unitHead');
 require('dotenv').config();
 
 console.log('🔍 DATABASE_URL exists:', !!process.env.DATABASE_URL);
@@ -147,6 +148,7 @@ app.use('/api/auth/', authLimiter);
 // ROUTES
 
 app.use('/api/qa', qaRoutes);
+app.use('/api/unit-head', unitHeadRoutes);
 app.use('/api/auth', authRoutes);
 
 // SWAGGER DOCUMENTATION
@@ -189,6 +191,19 @@ app.get('/', (req, res) => {
       'GET  /api/qa/risk-assessments',
       'GET  /api/qa/dashboard',
       'GET  /api/qa/dashboard-data',
+      'GET  /api/unit-head/dashboard-data',
+      'GET  /api/unit-head/draft-plan-review-data',
+      'GET  /api/unit-head/risk-assessments',
+      'PUT  /api/unit-head/risk-assessments/:id/finalization',
+      'POST /api/unit-head/risk-assessments/save-draft',
+      'POST /api/unit-head/risk-assessments/submit-to-qa',
+      'GET  /api/unit-head/apm',
+      'POST /api/unit-head/apm',
+      'GET  /api/unit-head/apm/:id',
+      'PUT  /api/unit-head/apm/:id',
+      'POST /api/unit-head/apm/:id/submit',
+      'POST /api/unit-head/apm/:id/approve',
+      'POST /api/unit-head/apm/:id/reject',
       'POST /api/qa/upload-risk-data',
       'POST /api/qa/upload-risk-excel',
       'GET  /api/qa/download-risk-template',
