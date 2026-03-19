@@ -1,12 +1,32 @@
 const nodemailer = require('nodemailer');
 
 const resolveEmailPassword = () => String(process.env.EMAIL_PASSWORD || '').replace(/\s+/g, '').trim();
+const resolveBoolean = (value, fallback = false) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  return String(value).trim().toLowerCase() === 'true';
+};
+
+const resolveEmailPort = () => {
+  const port = Number(process.env.EMAIL_PORT || 587);
+  return Number.isNaN(port) ? 587 : port;
+};
+
 const resolvedEmailPassword = resolveEmailPassword();
+const resolvedEmailPort = resolveEmailPort();
+const resolvedEmailSecure =
+  process.env.EMAIL_SECURE === undefined
+    ? resolvedEmailPort === 465
+    : resolveBoolean(process.env.EMAIL_SECURE, false);
 
 const transporterConfig = {
   host: process.env.EMAIL_HOST || 'smtp.gmail.com',
-  port: Number(process.env.EMAIL_PORT || 465),
-  secure: String(process.env.EMAIL_SECURE || 'true').toLowerCase() === 'true',
+  port: resolvedEmailPort,
+  secure: resolvedEmailSecure,
+  requireTLS: resolveBoolean(process.env.EMAIL_REQUIRE_TLS, !resolvedEmailSecure),
+  connectionTimeout: Number(process.env.EMAIL_CONNECTION_TIMEOUT || 20000),
+  greetingTimeout: Number(process.env.EMAIL_GREETING_TIMEOUT || 15000),
+  socketTimeout: Number(process.env.EMAIL_SOCKET_TIMEOUT || 30000),
+  family: 4,
   auth: {
     user: process.env.EMAIL_USER,
     pass: resolvedEmailPassword
@@ -23,6 +43,10 @@ console.log('Email transport:', {
   host: transporterConfig.host,
   port: transporterConfig.port,
   secure: transporterConfig.secure,
+  requireTLS: transporterConfig.requireTLS,
+  connectionTimeout: transporterConfig.connectionTimeout,
+  greetingTimeout: transporterConfig.greetingTimeout,
+  socketTimeout: transporterConfig.socketTimeout,
   hasPassword: Boolean(resolvedEmailPassword),
   passwordLength: resolvedEmailPassword.length
 });

@@ -90,6 +90,17 @@ const { swaggerUi, swaggerDocument, swaggerOptions } = require('./swagger');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+const resolveTrustProxy = () => {
+  const value = String(process.env.TRUST_PROXY || '1').trim().toLowerCase();
+
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value;
+};
+
+app.set('trust proxy', resolveTrustProxy());
+
 
 // DATABASE INITIALIZATION
 
