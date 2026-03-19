@@ -1,26 +1,39 @@
 const nodemailer = require('nodemailer');
 
-// Create transporter with Gmail credentials
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
+const resolveEmailPassword = () => String(process.env.EMAIL_PASSWORD || '').replace(/\s+/g, '').trim();
+const resolvedEmailPassword = resolveEmailPassword();
+
+const transporterConfig = {
+  host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+  port: Number(process.env.EMAIL_PORT || 465),
+  secure: String(process.env.EMAIL_SECURE || 'true').toLowerCase() === 'true',
   auth: {
     user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD
+    pass: resolvedEmailPassword
   }
-});
+};
+
+// Create transporter with SMTP credentials
+const transporter = nodemailer.createTransport(transporterConfig);
 
 // Verify email configuration
 console.log('Configuring real email service...');
 console.log('Email:', process.env.EMAIL_USER);
+console.log('Email transport:', {
+  host: transporterConfig.host,
+  port: transporterConfig.port,
+  secure: transporterConfig.secure,
+  hasPassword: Boolean(resolvedEmailPassword),
+  passwordLength: resolvedEmailPassword.length
+});
 
 transporter.verify((error, success) => {
   if (error) {
     console.log('Email configuration error:', error.message);
   } else {
-    console.log('✅ REAL email server is ready!');
+    console.log('REAL email server is ready!');
   }
 });
-
 const sendOTPEmail = async (email, otp, userName = 'User') => {
   try {
     const mailOptions = {
@@ -236,3 +249,4 @@ module.exports = {
   sendWelcomeEmail,
   sendPasswordResetEmail
 };
+
