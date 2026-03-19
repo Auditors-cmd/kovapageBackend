@@ -24,6 +24,7 @@ const VALID_ROLES = [
   'auditee', 'implementation_officer', 'team_member', 'team_lead',
   'quality_assurance', 'unit_head', 'bac_secretariat', 'chief_audit_executive'
 ];
+const ADMIN_BOOTSTRAP_ROLES = ['bac_secretariat', 'chief_audit_executive'];
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
 
@@ -83,6 +84,122 @@ const getWelcomeMessage = (role, name) => {
   };
   return messages[role] || `Welcome to KovaPage, ${name}!`;
 };
+
+// =======================
+// ADMIN BOOTSTRAP (ONE-TIME)
+// =======================
+
+// @desc    Bootstrap initial admin account (one-time, key protected)
+// @route   POST /api/auth/bootstrap/admin
+// @access  Public (requires x-bootstrap-key)
+router.post('/bootstrap/admin', async (req, res) => {
+  try {
+    const bootstrapKey = String(process.env.ADMIN_BOOTSTRAP_KEY || '').trim();
+    if (!bootstrapKey) {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin bootstrap is disabled'
+      });
+    }
+
+    const providedKey = String(req.headers['x-bootstrap-key'] || '').trim();
+    if (!providedKey || providedKey !== bootstrapKey) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid bootstrap key'
+      });
+    }
+
+    const { name, email, password, role } = req.body;
+
+    if (!name || !email || !password || !role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide name, email, password, and role'
+      });
+    }
+
+    if (!ADMIN_BOOTSTRAP_ROLES.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: `Bootstrap role must be one of: ${ADMIN_BOOTSTRAP_ROLES.join(', ')}`
+      });
+    }
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address'
+      });
+    }
+
+    if (typeof password !== 'string' || password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 8 characters long'
+      });
+    }
+
+    const normalizedEmail = normalizeEmail(email);
+
+    const existingAdminCount = await User.count({
+      where: {
+        role: { [Op.in]: ADMIN_BOOTSTRAP_ROLES },
+        isActive: true
+      }
+    });
+
+    if (existingAdminCount > 0) {
+      return res.status(409).json({
+        success: false,
+        message: 'Bootstrap is locked because an active BAC/CAE account already exists'
+      });
+    }
+
+    const existingUser = await User.findOne({
+      where: {
+        [Op.or]: [
+          { email: normalizedEmail }
+        ]
+      }
+    });
+
+    if (existingUser) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email already exists'
+      });
+    }
+
+    const user = await User.create({
+      name: name.trim(),
+      email: normalizedEmail,
+      password,
+      role,
+      authMethod: 'password',
+      isEmailVerified: true,
+      isActive: true,
+      roleSelectedAt: new Date()
+    });
+
+    const token = generateToken(user.id);
+
+    return res.status(201).json({
+      success: true,
+      message: `Bootstrap admin account created as ${role}`,
+      data: {
+        user: toSafeUser(user),
+        token
+      }
+    });
+  } catch (error) {
+    console.error('Bootstrap admin error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error creating bootstrap admin account'
+    });
+  }
+});
 
 // =======================
 // PASSWORD AUTHENTICATION

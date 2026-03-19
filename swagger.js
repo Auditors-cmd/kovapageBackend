@@ -1212,6 +1212,66 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
+    '/api/auth/bootstrap/admin': {
+      post: {
+        summary: 'Bootstrap Initial Admin Account',
+        description: 'Creates the first BAC or CAE account. This endpoint is protected by the x-bootstrap-key header and is locked once an active BAC/CAE account exists.',
+        tags: ['Authentication'],
+        parameters: [
+          {
+            in: 'header',
+            name: 'x-bootstrap-key',
+            required: true,
+            schema: {
+              type: 'string'
+            },
+            description: 'Bootstrap key from ADMIN_BOOTSTRAP_KEY environment variable'
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['name', 'email', 'password', 'role'],
+                properties: {
+                  name: { type: 'string', example: 'System Admin' },
+                  email: { type: 'string', format: 'email', example: 'admin@company.com' },
+                  password: { type: 'string', minLength: 8, example: 'StrongPass123!' },
+                  role: {
+                    type: 'string',
+                    enum: ['bac_secretariat', 'chief_audit_executive'],
+                    example: 'chief_audit_executive'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '201': {
+            description: 'Bootstrap admin created successfully'
+          },
+          '400': {
+            description: 'Validation error or user already exists'
+          },
+          '401': {
+            description: 'Invalid bootstrap key'
+          },
+          '403': {
+            description: 'Bootstrap feature disabled'
+          },
+          '409': {
+            description: 'Bootstrap locked because admin already exists'
+          },
+          '500': {
+            $ref: '#/components/responses/ServerError'
+          }
+        }
+      }
+    },
+
     '/api/auth/login': {
       post: {
         summary: 'Login with Password',
