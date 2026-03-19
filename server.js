@@ -187,10 +187,7 @@ app.get('/', (req, res) => {
     database: 'PostgreSQL',
     endpoints: [
       'GET  /api/health',
-      'POST /api/auth/register',
       'POST /api/auth/login', 
-      'POST /api/auth/email/register',
-      'POST /api/auth/email/verify',
       'POST /api/auth/email/login',
       'POST /api/auth/email/verify-login',
       'POST /api/auth/forgot-password',
