@@ -35,6 +35,8 @@ const AuditPlan = require('./models/AuditPlan');
 const MonitoringDashboard = require('./models/MonitoringDashboard');
 const AuditPlanTeamMember = require('./models/AuditPlanTeamMember');
 const DashboardShare = require('./models/DashboardShare');
+const AuditAssignmentTask = require('./models/AuditAssignmentTask');
+const Notification = require('./models/Notification');
 
 
 // SET UP ASSOCIATIONS - IMPROVED VERSION
@@ -50,7 +52,9 @@ const setupAssociations = () => {
     AuditPlan,
     MonitoringDashboard,
     AuditPlanTeamMember,
-    DashboardShare
+    DashboardShare,
+    AuditAssignmentTask,
+    Notification
   };
 
   // Initialize associations for each model that has an associate method
@@ -61,7 +65,9 @@ const setupAssociations = () => {
     AuditPlan, 
     MonitoringDashboard, 
     AuditPlanTeamMember, 
-    DashboardShare
+    DashboardShare,
+    AuditAssignmentTask,
+    Notification
   ];
 
   modelsWithAssociations.forEach(model => {
@@ -211,6 +217,9 @@ app.get('/', (req, res) => {
       'GET  /api/qa/dashboard',
       'GET  /api/qa/dashboard-data',
       'GET  /api/unit-head/dashboard-data',
+      'GET  /api/unit-head/approved-plan-data',
+      'POST /api/unit-head/approved-plan/:id/assign',
+      'GET  /api/unit-head/auto-schedule/recommendations',
       'GET  /api/unit-head/draft-plan-review-data',
       'GET  /api/unit-head/risk-assessments',
       'PUT  /api/unit-head/risk-assessments/:id/finalization',
@@ -313,6 +322,6 @@ app.listen(PORT, () => {
   console.log(`📚 Docs: http://localhost:${PORT}/api-docs`);
   console.log(`💾 Database: PostgreSQL`);
   console.log(`🌐 CORS: Enabled for all origins`);
-  console.log(`📊 Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare`);
+  console.log(`📊 Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification`);
   console.log('========================================');
 });

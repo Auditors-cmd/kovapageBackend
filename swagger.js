@@ -1995,6 +1995,163 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
+    '/api/unit-head/approved-plan-data': {
+      get: {
+        summary: 'Get Approved Plan Screen Data',
+        description: 'Returns Unit Head approved-plan overview, audit execution status counts, chart data, approved plan rows, and assignment pool/actions.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'department',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' },
+            description: 'Optional department override for roles above unit_head'
+          },
+          {
+            name: 'status',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['ongoing', 'not_started', 'completed'] },
+            description: 'Optional filter by derived execution status'
+          },
+          {
+            name: 'search',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' },
+            description: 'Optional search by plan title, plan number, or unit name'
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Approved plan screen data retrieved',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    success: { type: 'boolean', example: true },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        scope: {
+                          type: 'object',
+                          properties: {
+                            department: { type: 'string', nullable: true }
+                          }
+                        },
+                        approvedPlanOverview: { type: 'object' },
+                        auditStatusOverview: { type: 'object' },
+                        approvedPlans: { type: 'object' },
+                        assignmentPool: { type: 'object' }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/approved-plan/{id}/assign': {
+      post: {
+        summary: 'Assign Approved Plan',
+        description: 'Assigns an approved/consolidated/implemented plan to a team lead and team members, optionally updates execution status/progress, and creates assignment tasks + unread notifications for assignees.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: { type: 'string', format: 'uuid' }
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  teamLeadId: { type: 'string', format: 'uuid', nullable: true },
+                  teamMemberIds: {
+                    type: 'array',
+                    items: { type: 'string', format: 'uuid' }
+                  },
+                  executionStatus: {
+                    type: 'string',
+                    enum: ['not_started', 'ongoing', 'completed']
+                  },
+                  progressPercentage: {
+                    type: 'number',
+                    minimum: 0,
+                    maximum: 100
+                  },
+                  notes: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Approved plan assignment updated successfully' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/unit-head/auto-schedule/recommendations': {
+      get: {
+        summary: 'Generate Auto-Schedule Recommendations',
+        description: 'Recommendation-only endpoint that suggests next-year audit schedule after at least one year of approved/consolidated/implemented history. Final approval is still required.',
+        tags: ['Unit Head'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'targetYear',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', example: 2027 },
+            description: 'Year to generate schedule recommendations for. Defaults to next year.'
+          },
+          {
+            name: 'department',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' },
+            description: 'Optional department override for roles above unit_head'
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 200, example: 50 },
+            description: 'Max recommendation rows to return'
+          }
+        ],
+        responses: {
+          '200': { description: 'Auto-schedule recommendations generated' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
     '/api/unit-head/draft-plan-review-data': {
       get: {
         summary: 'Get Draft Plan Review Screen Data',

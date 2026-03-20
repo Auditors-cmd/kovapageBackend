@@ -219,6 +219,24 @@ AuditPlan.associate = (models) => {
     foreignKey: 'sourcePlanId',
     otherKey: 'consolidatedPlanId'
   });
+
+  if (models.AuditAssignmentTask) {
+    AuditPlan.hasMany(models.AuditAssignmentTask, {
+      foreignKey: 'auditPlanId',
+      as: 'assignmentTasks',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+  }
+
+  if (models.Notification) {
+    AuditPlan.hasMany(models.Notification, {
+      foreignKey: 'auditPlanId',
+      as: 'notifications',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
 };
 
 module.exports = AuditPlan;

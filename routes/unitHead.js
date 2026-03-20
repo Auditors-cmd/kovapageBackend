@@ -1,10 +1,13 @@
 const express = require('express');
 const { Op } = require('sequelize');
+const { sequelize } = require('../config/database');
 const { protect } = require('../middleware/auth');
 const { hasRoleLevel } = require('../middleware/roles');
 const AuditPlan = require('../models/AuditPlan');
 const RiskAssessment = require('../models/RiskAssessment');
 const User = require('../models/User');
+const AuditAssignmentTask = require('../models/AuditAssignmentTask');
+const Notification = require('../models/Notification');
 
 const router = express.Router();
 
@@ -184,6 +187,129 @@ const getProposedQuarters = (plan) => {
 
   const detected = detectQuarter(plan);
   return detected ? [detected] : [];
+};
+
+const APPROVED_PLAN_STATUSES = new Set(['approved', 'consolidated', 'implemented']);
+const ASSIGNABLE_TEAM_LEAD_ROLES = new Set(['team_lead']);
+const ASSIGNABLE_TEAM_MEMBER_ROLES = new Set(['team_member', 'team_lead']);
+
+const clampPercent = (value) => {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed)) return 0;
+  return Math.max(0, Math.min(100, Number(parsed.toFixed(1))));
+};
+
+const isApprovedPlanForOverview = (plan) => {
+  const apmStatus = normalizeApmStatus(plan?.metadata || {});
+  return APPROVED_PLAN_STATUSES.has(plan?.status) || apmStatus === 'approved';
+};
+
+const normalizeExecutionStatus = (value) => {
+  const normalized = String(value || '').toLowerCase().trim();
+  if (['not_started', 'not started', 'not-started', 'pending'].includes(normalized)) return 'not_started';
+  if (['ongoing', 'in_progress', 'in progress', 'active'].includes(normalized)) return 'ongoing';
+  if (['completed', 'done', 'implemented', 'closed'].includes(normalized)) return 'completed';
+  return null;
+};
+
+const deriveApprovedPlanExecutionStatus = (plan) => {
+  const metadataStatus = normalizeExecutionStatus(
+    plan?.metadata?.approvedPlan?.executionStatus ||
+    plan?.metadata?.execution?.status
+  );
+  if (metadataStatus) return metadataStatus;
+
+  if (plan.status === 'implemented') return 'completed';
+
+  const progress = clampPercent(
+    plan?.metadata?.execution?.progressPercentage !== undefined
+      ? plan?.metadata?.execution?.progressPercentage
+      : plan?.progressPercentage
+  );
+
+  if (progress >= 100) return 'completed';
+  if (progress > 0) return 'ongoing';
+  return 'not_started';
+};
+
+const executionStatusLabel = (status) => {
+  if (status === 'ongoing') return 'Ongoing';
+  if (status === 'completed') return 'Completed';
+  return 'Not Started';
+};
+
+const getQuarterDateRange = (year, quarter) => {
+  const quarterStartMonthMap = { Q1: 0, Q2: 3, Q3: 6, Q4: 9 };
+  const startMonth = quarterStartMonthMap[quarter] ?? 0;
+  const startDate = new Date(Date.UTC(year, startMonth, 1));
+  const endDate = new Date(Date.UTC(year, startMonth + 3, 0));
+  return { startDate, endDate };
+};
+
+const normalizeTargetYear = (yearValue) => {
+  const parsed = Number(yearValue);
+  const now = new Date();
+  const fallback = now.getFullYear() + 1;
+  if (Number.isNaN(parsed) || parsed < 2000 || parsed > 2100) return fallback;
+  return Math.round(parsed);
+};
+
+const buildAutoScheduleRecommendation = (plan, targetYear) => {
+  const riskScore = deriveApmRiskScore(plan);
+  const riskRating = deriveApmRiskRating(riskScore, plan);
+  const historicalQuarters = getProposedQuarters(plan);
+  const baseQuarter = historicalQuarters[0] || detectQuarter(plan) || 'Q3';
+
+  let recommendedFrequency = 'Annual';
+  let recommendedQuarters = [baseQuarter];
+
+  if (riskScore >= 75) {
+    recommendedFrequency = 'Quarterly';
+    recommendedQuarters = ['Q1', 'Q2', 'Q3', 'Q4'];
+  } else if (riskScore >= 55) {
+    recommendedFrequency = 'Bi-Annual';
+    recommendedQuarters = ['Q2', 'Q4'];
+  } else if (riskScore >= 35) {
+    recommendedFrequency = 'Annual';
+    recommendedQuarters = [baseQuarter];
+  } else {
+    recommendedFrequency = 'Annual';
+    recommendedQuarters = ['Q4'];
+  }
+
+  const firstQuarter = recommendedQuarters[0] || 'Q1';
+  const lastQuarter = recommendedQuarters[recommendedQuarters.length - 1] || firstQuarter;
+  const startWindow = getQuarterDateRange(targetYear, firstQuarter);
+  const endWindow = getQuarterDateRange(targetYear, lastQuarter);
+
+  const rationale = [
+    `Risk score ${riskScore} (${riskRating}) was used to determine frequency.`,
+    `Historical quarter pattern: ${historicalQuarters.length > 0 ? historicalQuarters.join(', ') : 'none'}`
+  ];
+
+  if (riskScore >= 75) rationale.push('High risk band triggered quarterly coverage recommendation.');
+  else if (riskScore >= 55) rationale.push('Elevated risk band triggered bi-annual coverage recommendation.');
+  else rationale.push('Moderate/lower risk band triggered annual coverage recommendation.');
+
+  return {
+    sourcePlanId: plan.id,
+    sourcePlanNumber: plan.planNumber,
+    title: plan.title,
+    unitName: plan.department || 'Unassigned Unit',
+    riskScore,
+    riskRating,
+    lastAuditPeriod: plan.auditPeriod || null,
+    historicalQuarters,
+    recommendedFrequency,
+    recommendedQuarters,
+    recommendedWindow: {
+      startDate: startWindow.startDate,
+      endDate: endWindow.endDate
+    },
+    recommendationStatus: 'recommendation_only',
+    requiresApproval: true,
+    rationale
+  };
 };
 
 // @desc    Create a new APM
@@ -678,6 +804,556 @@ router.post('/apm/:id/reject', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error rejecting APM',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Get Approved Plan dashboard data
+// @route   GET /api/unit-head/approved-plan-data
+// @access  Unit Head and above
+router.get('/approved-plan-data', async (req, res) => {
+  try {
+    const { department, status, search } = req.query;
+    const scopedDepartment = resolveScopedDepartment(req, department);
+    const auditorCapacityHours = parseInt(process.env.AUDITOR_CAPACITY_HOURS || '160', 10);
+
+    if (req.user.role === 'unit_head' && !scopedDepartment) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unit head profile must include a department'
+      });
+    }
+
+    const where = {};
+    if (scopedDepartment) where.department = scopedDepartment;
+
+    const plans = await AuditPlan.findAll({
+      where,
+      include: [{
+        model: RiskAssessment,
+        as: 'riskAssessment',
+        attributes: ['id', 'title', 'totalRisks', 'highRiskCount', 'mediumRiskCount', 'lowRiskCount']
+      }],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const approvedRows = plans
+      .filter(isApprovedPlanForOverview)
+      .map(plan => {
+        const executionStatus = deriveApprovedPlanExecutionStatus(plan);
+        const progressPercentage = clampPercent(
+          plan?.metadata?.execution?.progressPercentage !== undefined
+            ? plan?.metadata?.execution?.progressPercentage
+            : plan?.progressPercentage
+        );
+        const resources = estimatePlanResources(plan, auditorCapacityHours);
+        const budget = Number((parseFloat(plan.budget) || 0).toFixed(2));
+        const riskScore = deriveApmRiskScore(plan);
+        const riskRating = deriveApmRiskRating(riskScore, plan);
+        const apmStatus = normalizeApmStatus(plan.metadata);
+
+        return {
+          id: plan.id,
+          planNumber: plan.planNumber,
+          title: plan.title,
+          unitName: plan.department || 'Unassigned Unit',
+          auditPeriod: plan.auditPeriod || null,
+          proposedFrequency: getProposedFrequency(plan),
+          proposedQuarters: getProposedQuarters(plan),
+          operationalRiskScore: riskScore,
+          riskRating,
+          progressPercentage,
+          executionStatus,
+          executionStatusLabel: executionStatusLabel(executionStatus),
+          workflowStatus: plan.status,
+          apmStatus,
+          resources,
+          budget,
+          teamLeadId: plan.teamLeadId || null,
+          teamMemberIds: Array.isArray(plan.teamMemberIds) ? plan.teamMemberIds : [],
+          assignmentStatus: (plan.teamLeadId || (Array.isArray(plan.teamMemberIds) && plan.teamMemberIds.length > 0))
+            ? 'assigned'
+            : 'unassigned',
+          approvedAt: plan?.metadata?.apm?.reviewedAt || plan.approvedAt || null,
+          approvedByName: plan?.metadata?.apm?.reviewedByName || null,
+          submittedToQa: plan?.metadata?.apm?.qaSubmission?.submittedToQa === true,
+          qaSubmissionDate: plan?.metadata?.apm?.qaSubmission?.submittedAt || null,
+          startDate: plan.startDate || null,
+          endDate: plan.endDate || null,
+          createdAt: plan.createdAt
+        };
+      });
+
+    const filteredByStatus = (() => {
+      if (!status) return approvedRows;
+      const normalized = normalizeExecutionStatus(status);
+      if (!normalized) return approvedRows;
+      return approvedRows.filter(row => row.executionStatus === normalized);
+    })();
+
+    const finalRows = filteredByStatus.filter(row => {
+      if (!search) return true;
+      const query = String(search).toLowerCase();
+      return (
+        String(row.title || '').toLowerCase().includes(query) ||
+        String(row.planNumber || '').toLowerCase().includes(query) ||
+        String(row.unitName || '').toLowerCase().includes(query)
+      );
+    });
+
+    const statusCounts = {
+      ongoing: finalRows.filter(row => row.executionStatus === 'ongoing').length,
+      notStarted: finalRows.filter(row => row.executionStatus === 'not_started').length,
+      completed: finalRows.filter(row => row.executionStatus === 'completed').length
+    };
+
+    const totalAudits = finalRows.length;
+    const totalResources = finalRows.reduce((sum, row) => sum + (row.resources || 0), 0);
+    const totalBudget = Number(finalRows.reduce((sum, row) => sum + (row.budget || 0), 0).toFixed(2));
+    const averageProgress = totalAudits > 0
+      ? Number((finalRows.reduce((sum, row) => sum + (row.progressPercentage || 0), 0) / totalAudits).toFixed(1))
+      : 0;
+    const assignedCount = finalRows.filter(row => row.assignmentStatus === 'assigned').length;
+
+    const assignmentCandidates = await User.findAll({
+      where: {
+        isActive: true,
+        role: { [Op.in]: ['team_lead', 'team_member'] },
+        ...(scopedDepartment ? { department: scopedDepartment } : {})
+      },
+      attributes: ['id', 'name', 'email', 'role', 'department'],
+      order: [['name', 'ASC']]
+    });
+
+    res.json({
+      success: true,
+      data: {
+        scope: {
+          department: scopedDepartment || null
+        },
+        approvedPlanOverview: {
+          title: 'Approved Plan Overview',
+          description: 'This section displays approved audit plans. Once the Master Audit Plan is approved by the board, unit heads can review full details here.',
+          totalApprovedPlans: totalAudits
+        },
+        auditStatusOverview: {
+          totalAudits,
+          counts: statusCounts,
+          chart: [
+            { key: 'ongoing', label: 'Ongoing', value: statusCounts.ongoing },
+            { key: 'notStarted', label: 'Not Started', value: statusCounts.notStarted },
+            { key: 'completed', label: 'Completed', value: statusCounts.completed }
+          ]
+        },
+        approvedPlans: {
+          rows: finalRows,
+          actions: {
+            assign: '/api/unit-head/approved-plan/:id/assign'
+          },
+          totals: {
+            resources: totalResources,
+            budget: totalBudget
+          },
+          summary: {
+            totalRows: totalAudits,
+            ongoing: statusCounts.ongoing,
+            notStarted: statusCounts.notStarted,
+            completed: statusCounts.completed,
+            averageProgress,
+            assigned: assignedCount,
+            unassigned: totalAudits - assignedCount
+          }
+        },
+        assignmentPool: {
+          totalUsers: assignmentCandidates.length,
+          teamLeads: assignmentCandidates.filter(user => user.role === 'team_lead'),
+          teamMembers: assignmentCandidates.filter(user => user.role === 'team_member')
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Approved plan data error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fetching approved plan data',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Assign approved plan to audit team
+// @route   POST /api/unit-head/approved-plan/:id/assign
+// @access  Unit Head and above
+router.post('/approved-plan/:id/assign', async (req, res) => {
+  let transaction;
+  try {
+    const {
+      teamLeadId,
+      teamMemberIds,
+      notes,
+      executionStatus,
+      progressPercentage
+    } = req.body;
+
+    if (teamLeadId === undefined && teamMemberIds === undefined && executionStatus === undefined && progressPercentage === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Provide at least one assignment field: teamLeadId, teamMemberIds, executionStatus, progressPercentage'
+      });
+    }
+
+    transaction = await sequelize.transaction();
+
+    const plan = await AuditPlan.findByPk(req.params.id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+    if (!plan) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'Approved plan not found'
+      });
+    }
+
+    if (!checkDepartmentAccess(req, plan.department)) {
+      await transaction.rollback();
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied for this department'
+      });
+    }
+
+    if (!isApprovedPlanForOverview(plan)) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Only approved/consolidated/implemented plans can be assigned from this screen'
+      });
+    }
+
+    const nextTeamMemberIds = teamMemberIds !== undefined
+      ? Array.from(new Set((Array.isArray(teamMemberIds) ? teamMemberIds : []).filter(Boolean)))
+      : (Array.isArray(plan.teamMemberIds) ? plan.teamMemberIds : []);
+
+    const nextTeamLeadId = teamLeadId !== undefined ? (teamLeadId || null) : (plan.teamLeadId || null);
+
+    if (nextTeamLeadId && nextTeamMemberIds.includes(nextTeamLeadId)) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Team lead cannot also be included as a team member'
+      });
+    }
+
+    const requestedIds = [
+      ...(nextTeamLeadId ? [nextTeamLeadId] : []),
+      ...nextTeamMemberIds
+    ];
+
+    if (requestedIds.length > 0) {
+      const users = await User.findAll({
+        where: {
+          id: requestedIds,
+          isActive: true
+        },
+        attributes: ['id', 'name', 'email', 'role', 'department'],
+        transaction
+      });
+
+      if (users.length !== requestedIds.length) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'One or more assigned users do not exist or are inactive'
+        });
+      }
+
+      const userById = users.reduce((acc, user) => {
+        acc[user.id] = user;
+        return acc;
+      }, {});
+
+      if (nextTeamLeadId) {
+        const lead = userById[nextTeamLeadId];
+        if (!lead || !ASSIGNABLE_TEAM_LEAD_ROLES.has(lead.role)) {
+          await transaction.rollback();
+          return res.status(400).json({
+            success: false,
+            message: 'teamLeadId must belong to an active team lead'
+          });
+        }
+      }
+
+      const invalidTeamMembers = nextTeamMemberIds.filter((id) => {
+        const user = userById[id];
+        return !user || !ASSIGNABLE_TEAM_MEMBER_ROLES.has(user.role);
+      });
+
+      if (invalidTeamMembers.length > 0) {
+        await transaction.rollback();
+        return res.status(400).json({
+          success: false,
+          message: 'All teamMemberIds must belong to active team members or team leads'
+        });
+      }
+
+      if (plan.department) {
+        const outsideDepartment = users.some((user) => user.department && user.department !== plan.department);
+        if (outsideDepartment) {
+          await transaction.rollback();
+          return res.status(400).json({
+            success: false,
+            message: `All assigned users must belong to department: ${plan.department}`
+          });
+        }
+      }
+    }
+
+    const currentMeta = plan.metadata || {};
+    const approvedPlanMeta = currentMeta.approvedPlan || {};
+    const nextExecutionStatus = executionStatus !== undefined
+      ? normalizeExecutionStatus(executionStatus)
+      : normalizeExecutionStatus(approvedPlanMeta.executionStatus);
+
+    if (executionStatus !== undefined && !nextExecutionStatus) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'executionStatus must be one of: not_started, ongoing, completed'
+      });
+    }
+
+    const parsedProgress = progressPercentage !== undefined ? Number(progressPercentage) : null;
+    if (progressPercentage !== undefined && (Number.isNaN(parsedProgress) || parsedProgress < 0 || parsedProgress > 100)) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'progressPercentage must be a number between 0 and 100'
+      });
+    }
+
+    const assignmentTargets = [
+      ...(nextTeamLeadId ? [{ id: nextTeamLeadId, assignmentRole: 'team_lead' }] : []),
+      ...nextTeamMemberIds.map((id) => ({ id, assignmentRole: 'team_member' }))
+    ];
+
+    const assigneeMap = {};
+    if (assignmentTargets.length > 0) {
+      const users = await User.findAll({
+        where: { id: assignmentTargets.map((item) => item.id) },
+        attributes: ['id', 'name', 'email'],
+        transaction
+      });
+      users.forEach((user) => {
+        assigneeMap[user.id] = user;
+      });
+    }
+
+    const assignmentTimestamp = new Date();
+    await plan.update({
+      teamLeadId: nextTeamLeadId,
+      teamMemberIds: nextTeamMemberIds,
+      progressPercentage: progressPercentage !== undefined ? clampPercent(parsedProgress) : plan.progressPercentage,
+      metadata: {
+        ...currentMeta,
+        approvedPlan: {
+          ...approvedPlanMeta,
+          executionStatus: nextExecutionStatus || approvedPlanMeta.executionStatus || 'not_started',
+          progressPercentage: progressPercentage !== undefined
+            ? clampPercent(parsedProgress)
+            : (approvedPlanMeta.progressPercentage ?? plan.progressPercentage ?? 0),
+          assignment: {
+            teamLeadId: nextTeamLeadId,
+            teamMemberIds: nextTeamMemberIds,
+            notes: notes || null,
+            assignedAt: assignmentTimestamp,
+            assignedBy: req.user.id,
+            assignedByName: req.user.name
+          }
+        }
+      }
+    }, { transaction });
+
+    await AuditAssignmentTask.update({
+      status: 'reassigned',
+      isActive: false
+    }, {
+      where: {
+        auditPlanId: plan.id,
+        taskType: 'audit_assignment',
+        isActive: true,
+        status: { [Op.in]: ['pending', 'in_progress'] }
+      },
+      transaction
+    });
+
+    for (const target of assignmentTargets) {
+      const assignee = assigneeMap[target.id];
+      if (!assignee) continue;
+
+      await AuditAssignmentTask.create({
+        auditPlanId: plan.id,
+        assigneeId: target.id,
+        assignedBy: req.user.id,
+        assignmentRole: target.assignmentRole,
+        taskType: 'audit_assignment',
+        status: 'pending',
+        dueDate: plan.startDate || null,
+        metadata: {
+          planNumber: plan.planNumber,
+          planTitle: plan.title,
+          unitName: plan.department || null,
+          notes: notes || null
+        }
+      }, { transaction });
+
+      await Notification.create({
+        userId: target.id,
+        auditPlanId: plan.id,
+        type: 'assignment',
+        title: `New Audit Assignment: ${plan.planNumber}`,
+        message: `${req.user.name} assigned you to "${plan.title}" as ${target.assignmentRole.replace('_', ' ')}.`,
+        status: 'unread',
+        metadata: {
+          assignmentRole: target.assignmentRole,
+          assignedBy: req.user.id,
+          assignedByName: req.user.name,
+          assigneeEmail: assignee.email,
+          notes: notes || null
+        }
+      }, { transaction });
+    }
+
+    await transaction.commit();
+    await plan.reload();
+
+    res.json({
+      success: true,
+      message: 'Approved plan assignment updated successfully',
+      data: {
+        id: plan.id,
+        teamLeadId: plan.teamLeadId,
+        teamMemberIds: plan.teamMemberIds,
+        progressPercentage: plan.progressPercentage,
+        executionStatus: deriveApprovedPlanExecutionStatus(plan),
+        tasksCreated: assignmentTargets.length,
+        notificationsCreated: assignmentTargets.length,
+        assignedAt: assignmentTimestamp
+      }
+    });
+  } catch (error) {
+    if (transaction) {
+      await transaction.rollback().catch(() => {});
+    }
+    console.error('Assign approved plan error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error assigning approved plan',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Generate next-year audit schedule recommendations (approval required)
+// @route   GET /api/unit-head/auto-schedule/recommendations
+// @access  Unit Head and above
+router.get('/auto-schedule/recommendations', async (req, res) => {
+  try {
+    const { department, targetYear, limit } = req.query;
+    const scopedDepartment = resolveScopedDepartment(req, department);
+
+    if (req.user.role === 'unit_head' && !scopedDepartment) {
+      return res.status(400).json({
+        success: false,
+        message: 'Unit head profile must include a department'
+      });
+    }
+
+    const scheduleYear = normalizeTargetYear(targetYear);
+    const maxRows = Math.max(1, Math.min(200, Number(limit || 50)));
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+    const where = {
+      status: { [Op.in]: ['approved', 'consolidated', 'implemented'] }
+    };
+    if (scopedDepartment) where.department = scopedDepartment;
+
+    const sourcePlans = await AuditPlan.findAll({
+      where,
+      include: [{
+        model: RiskAssessment,
+        as: 'riskAssessment',
+        attributes: ['id', 'totalRisks', 'highRiskCount', 'mediumRiskCount', 'lowRiskCount']
+      }],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const historicalPlans = sourcePlans.filter((plan) => {
+      const createdAt = new Date(plan.createdAt);
+      return !Number.isNaN(createdAt.getTime()) && createdAt <= oneYearAgo;
+    });
+
+    if (historicalPlans.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          scope: {
+            department: scopedDepartment || null
+          },
+          targetYear: scheduleYear,
+          autoScheduling: {
+            eligible: false,
+            requiresApproval: true,
+            message: 'At least 12 months of approved/consolidated/implemented audit history is required before auto-scheduling recommendations are generated.'
+          },
+          recommendations: []
+        }
+      });
+    }
+
+    const latestPlanByKey = new Map();
+    historicalPlans.forEach((plan) => {
+      const key = `${plan.department || ''}::${plan.title || ''}`;
+      const existing = latestPlanByKey.get(key);
+      if (!existing || new Date(plan.createdAt) > new Date(existing.createdAt)) {
+        latestPlanByKey.set(key, plan);
+      }
+    });
+
+    const recommendations = Array.from(latestPlanByKey.values())
+      .slice(0, maxRows)
+      .map((plan) => buildAutoScheduleRecommendation(plan, scheduleYear));
+
+    res.json({
+      success: true,
+      data: {
+        scope: {
+          department: scopedDepartment || null
+        },
+        targetYear: scheduleYear,
+        autoScheduling: {
+          eligible: true,
+          requiresApproval: true,
+          mode: 'recommendation_only',
+          sourcePlansCount: historicalPlans.length,
+          generatedRecommendations: recommendations.length
+        },
+        recommendations,
+        actions: {
+          nextStep: 'Review recommendations and route for QA/CAE approval before execution scheduling.',
+          reviewDraftPlanData: '/api/unit-head/draft-plan-review-data',
+          assignmentRoute: '/api/unit-head/approved-plan/:id/assign'
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Auto-schedule recommendation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error generating auto-schedule recommendations',
       error: error.message
     });
   }

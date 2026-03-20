@@ -276,6 +276,31 @@ User.associate = (models) => {
     otherKey: 'auditPlanId',
     as: 'assignedAuditPlans'
   });
+
+  if (models.AuditAssignmentTask) {
+    User.hasMany(models.AuditAssignmentTask, {
+      foreignKey: 'assigneeId',
+      as: 'assignmentTasks',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+
+    User.hasMany(models.AuditAssignmentTask, {
+      foreignKey: 'assignedBy',
+      as: 'assignedTasks',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
+
+  if (models.Notification) {
+    User.hasMany(models.Notification, {
+      foreignKey: 'userId',
+      as: 'notifications',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+  }
 };
 
 module.exports = User;
