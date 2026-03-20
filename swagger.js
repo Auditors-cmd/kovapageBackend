@@ -2825,6 +2825,120 @@ Complete audit management system with 8 specialized user roles, OTP and password
       }
     },
 
+    '/api/qa/auto-schedule/recommendations': {
+      get: {
+        summary: 'Get QA Auto-Schedule Recommendations',
+        description: 'Returns cross-unit next-year audit schedule recommendations based on at least one year of approved/consolidated/implemented history. Recommendation-only; approval required.',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'targetYear',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', example: 2027 }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' }
+          },
+          {
+            name: 'limit',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer', minimum: 1, maximum: 200, example: 100 }
+          }
+        ],
+        responses: {
+          '200': { description: 'Auto-schedule recommendations retrieved' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/auto-schedule/submissions': {
+      get: {
+        summary: 'List QA Auto-Schedule Submissions',
+        description: 'Returns auto-schedule submissions prepared by QA for CAE decision.',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['pending_approval', 'approved', 'rejected'] }
+          },
+          {
+            name: 'targetYear',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer' }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': { description: 'Auto-schedule submissions retrieved' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/qa/auto-schedule/submit-to-cae': {
+      post: {
+        summary: 'Submit Auto-Schedule Recommendations to CAE',
+        description: 'Creates an auto-schedule submission package and notifies CAE users for approval decision.',
+        tags: ['Quality Assurance'],
+        security: [{ bearerAuth: [] }],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  sourcePlanIds: {
+                    type: 'array',
+                    items: { type: 'string', format: 'uuid' },
+                    description: 'Optional explicit source plan IDs; if omitted, all eligible plans are considered'
+                  },
+                  targetYear: {
+                    type: 'integer',
+                    example: 2027
+                  },
+                  department: {
+                    type: 'string'
+                  },
+                  notes: {
+                    type: 'string'
+                  }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '201': { description: 'Auto-schedule recommendations submitted to CAE' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
     '/api/qa/submit-to-cae': {
       post: {
         summary: 'Submit Audit Plans to CAE',
@@ -2956,6 +3070,143 @@ Complete audit management system with 8 specialized user roles, OTP and password
           },
           '401': { $ref: '#/components/responses/Unauthorized' },
           '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/cae/auto-schedule/submissions': {
+      get: {
+        summary: 'List CAE Auto-Schedule Submissions',
+        description: 'CAE view of pending/approved/rejected auto-schedule submissions.',
+        tags: ['Chief Audit Executive'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'status',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', enum: ['pending_approval', 'approved', 'rejected'] }
+          },
+          {
+            name: 'targetYear',
+            in: 'query',
+            required: false,
+            schema: { type: 'integer' }
+          },
+          {
+            name: 'department',
+            in: 'query',
+            required: false,
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': { description: 'CAE auto-schedule submissions retrieved' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/cae/auto-schedule/submissions/{submissionId}': {
+      get: {
+        summary: 'Get CAE Auto-Schedule Submission',
+        description: 'Get one auto-schedule submission by submissionId.',
+        tags: ['Chief Audit Executive'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'submissionId',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' }
+          }
+        ],
+        responses: {
+          '200': { description: 'Auto-schedule submission retrieved' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/cae/auto-schedule/{submissionId}/approve': {
+      post: {
+        summary: 'Approve Auto-Schedule Submission',
+        description: 'CAE approves a pending auto-schedule recommendation package.',
+        tags: ['Chief Audit Executive'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'submissionId',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' }
+          }
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  notes: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Auto-schedule submission approved' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
+          '500': { $ref: '#/components/responses/ServerError' }
+        }
+      }
+    },
+
+    '/api/cae/auto-schedule/{submissionId}/reject': {
+      post: {
+        summary: 'Reject Auto-Schedule Submission',
+        description: 'CAE rejects a pending auto-schedule recommendation package.',
+        tags: ['Chief Audit Executive'],
+        security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'submissionId',
+            in: 'path',
+            required: true,
+            schema: { type: 'string' }
+          }
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['reason'],
+                properties: {
+                  reason: { type: 'string', example: 'Risk rationale is incomplete for two units.' },
+                  notes: { type: 'string' }
+                }
+              }
+            }
+          }
+        },
+        responses: {
+          '200': { description: 'Auto-schedule submission rejected' },
+          '400': { $ref: '#/components/responses/BadRequest' },
+          '401': { $ref: '#/components/responses/Unauthorized' },
+          '403': { $ref: '#/components/responses/Forbidden' },
+          '404': { $ref: '#/components/responses/NotFound' },
           '500': { $ref: '#/components/responses/ServerError' }
         }
       }

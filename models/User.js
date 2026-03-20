@@ -301,6 +301,22 @@ User.associate = (models) => {
       onUpdate: 'CASCADE'
     });
   }
+
+  if (models.AutoScheduleSubmission) {
+    User.hasMany(models.AutoScheduleSubmission, {
+      foreignKey: 'submittedBy',
+      as: 'autoScheduleSubmissions',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+
+    User.hasMany(models.AutoScheduleSubmission, {
+      foreignKey: 'decidedBy',
+      as: 'autoScheduleDecisions',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
 };
 
 module.exports = User;

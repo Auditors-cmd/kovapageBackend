@@ -10,6 +10,8 @@ const RiskAssessment = require('../models/RiskAssessment');
 const AuditPlan = require('../models/AuditPlan');
 const MonitoringDashboard = require('../models/MonitoringDashboard');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
+const AutoScheduleSubmission = require('../models/AutoScheduleSubmission');
 const { sequelize } = require('../config/database');
 const { uploadRiskData, deleteFromCloudinary } = require('../middleware/upload');
 const cloudinary = require('../config/cloudinary');
@@ -184,6 +186,92 @@ const deriveRiskRating = (score, plan = null) => {
 const calculatePercentChange = (priorValue, currentValue) => {
   if (!priorValue) return currentValue > 0 ? 100 : 0;
   return Number((((currentValue - priorValue) / priorValue) * 100).toFixed(1));
+};
+
+const normalizeTargetYear = (yearValue) => {
+  const parsed = Number(yearValue);
+  const now = new Date();
+  const fallback = now.getFullYear() + 1;
+  if (Number.isNaN(parsed) || parsed < 2000 || parsed > 2100) return fallback;
+  return Math.round(parsed);
+};
+
+const getQuarterDateRange = (year, quarter) => {
+  const quarterStartMonthMap = { Q1: 0, Q2: 3, Q3: 6, Q4: 9 };
+  const startMonth = quarterStartMonthMap[quarter] ?? 0;
+  const startDate = new Date(Date.UTC(year, startMonth, 1));
+  const endDate = new Date(Date.UTC(year, startMonth + 3, 0));
+  return { startDate, endDate };
+};
+
+const buildAutoScheduleRecommendation = (plan, targetYear) => {
+  const riskScore = deriveRiskScore(plan);
+  const riskRating = deriveRiskRating(riskScore, plan);
+
+  const historicalQuarters = (() => {
+    const explicit = plan?.metadata?.apm?.proposedQuarters;
+    if (Array.isArray(explicit) && explicit.length > 0) return explicit;
+
+    const periodText = (plan.auditPeriod || '').toString().toUpperCase();
+    const matches = periodText.match(/Q[1-4]/g);
+    if (matches && matches.length > 0) return Array.from(new Set(matches));
+
+    const detected = detectQuarter(plan);
+    return detected ? [detected] : [];
+  })();
+
+  const baseQuarter = historicalQuarters[0] || detectQuarter(plan) || 'Q3';
+
+  let recommendedFrequency = 'Annual';
+  let recommendedQuarters = [baseQuarter];
+
+  if (riskScore >= 75) {
+    recommendedFrequency = 'Quarterly';
+    recommendedQuarters = ['Q1', 'Q2', 'Q3', 'Q4'];
+  } else if (riskScore >= 55) {
+    recommendedFrequency = 'Bi-Annual';
+    recommendedQuarters = ['Q2', 'Q4'];
+  } else if (riskScore >= 35) {
+    recommendedFrequency = 'Annual';
+    recommendedQuarters = [baseQuarter];
+  } else {
+    recommendedFrequency = 'Annual';
+    recommendedQuarters = ['Q4'];
+  }
+
+  const firstQuarter = recommendedQuarters[0] || 'Q1';
+  const lastQuarter = recommendedQuarters[recommendedQuarters.length - 1] || firstQuarter;
+  const startWindow = getQuarterDateRange(targetYear, firstQuarter);
+  const endWindow = getQuarterDateRange(targetYear, lastQuarter);
+
+  const rationale = [
+    `Risk score ${riskScore} (${riskRating}) was used to determine frequency.`,
+    `Historical quarter pattern: ${historicalQuarters.length > 0 ? historicalQuarters.join(', ') : 'none'}`
+  ];
+
+  if (riskScore >= 75) rationale.push('High risk band triggered quarterly coverage recommendation.');
+  else if (riskScore >= 55) rationale.push('Elevated risk band triggered bi-annual coverage recommendation.');
+  else rationale.push('Moderate/lower risk band triggered annual coverage recommendation.');
+
+  return {
+    sourcePlanId: plan.id,
+    sourcePlanNumber: plan.planNumber,
+    title: plan.title,
+    unitName: plan.department || 'Unassigned Unit',
+    riskScore,
+    riskRating,
+    lastAuditPeriod: plan.auditPeriod || null,
+    historicalQuarters,
+    recommendedFrequency,
+    recommendedQuarters,
+    recommendedWindow: {
+      startDate: startWindow.startDate,
+      endDate: endWindow.endDate
+    },
+    recommendationStatus: 'recommendation_only',
+    requiresApproval: true,
+    rationale
+  };
 };
 
 const escapeHtml = (value) => {
@@ -1737,6 +1825,296 @@ const exportAuditPlansPdfHandler = async (req, res) => {
 
 router.get('/audit-plans/export-pdf', exportAuditPlansPdfHandler);
 router.get('/audit-plans/export.pdf', exportAuditPlansPdfHandler);
+
+// @desc    Get cross-unit auto-schedule recommendations for QA review
+// @route   GET /api/qa/auto-schedule/recommendations
+// @access  Quality Assurance and above
+router.get('/auto-schedule/recommendations', async (req, res) => {
+  try {
+    const { department, targetYear, limit } = req.query;
+    const scheduleYear = normalizeTargetYear(targetYear);
+    const maxRows = Math.max(1, Math.min(200, Number(limit || 100)));
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+    const where = {
+      status: { [Op.in]: ['approved', 'consolidated', 'implemented'] }
+    };
+
+    if (department) where.department = department;
+
+    const sourcePlans = await AuditPlan.findAll({
+      where,
+      include: [{
+        model: RiskAssessment,
+        as: 'riskAssessment',
+        attributes: ['id', 'totalRisks', 'highRiskCount', 'mediumRiskCount', 'lowRiskCount']
+      }],
+      order: [['createdAt', 'DESC']]
+    });
+
+    const historicalPlans = sourcePlans.filter((plan) => {
+      const createdAt = new Date(plan.createdAt);
+      return !Number.isNaN(createdAt.getTime()) && createdAt <= oneYearAgo;
+    });
+
+    if (historicalPlans.length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          scope: {
+            department: department || null
+          },
+          targetYear: scheduleYear,
+          autoScheduling: {
+            eligible: false,
+            requiresApproval: true,
+            message: 'At least 12 months of approved/consolidated/implemented audit history is required before auto-scheduling recommendations are generated.'
+          },
+          recommendations: []
+        }
+      });
+    }
+
+    const latestPlanByKey = new Map();
+    historicalPlans.forEach((plan) => {
+      const key = `${plan.department || ''}::${plan.title || ''}`;
+      const existing = latestPlanByKey.get(key);
+      if (!existing || new Date(plan.createdAt) > new Date(existing.createdAt)) {
+        latestPlanByKey.set(key, plan);
+      }
+    });
+
+    const recommendations = Array.from(latestPlanByKey.values())
+      .slice(0, maxRows)
+      .map((plan) => buildAutoScheduleRecommendation(plan, scheduleYear));
+
+    return res.json({
+      success: true,
+      data: {
+        scope: {
+          department: department || null
+        },
+        targetYear: scheduleYear,
+        autoScheduling: {
+          eligible: true,
+          requiresApproval: true,
+          mode: 'recommendation_only',
+          sourcePlansCount: historicalPlans.length,
+          generatedRecommendations: recommendations.length
+        },
+        recommendations,
+        actions: {
+          submitToCae: '/api/qa/auto-schedule/submit-to-cae'
+        }
+      }
+    });
+  } catch (error) {
+    console.error('QA auto-schedule recommendations error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error generating auto-schedule recommendations',
+      error: error.message
+    });
+  }
+});
+
+// @desc    List auto-schedule submissions prepared by QA
+// @route   GET /api/qa/auto-schedule/submissions
+// @access  Quality Assurance and above
+router.get('/auto-schedule/submissions', async (req, res) => {
+  try {
+    const { status, targetYear, department } = req.query;
+    const where = {};
+    if (status) where.status = status;
+    if (targetYear) where.targetYear = Number(targetYear);
+    if (department) where.scopeDepartment = department;
+
+    const submissions = await AutoScheduleSubmission.findAll({
+      where,
+      order: [['submittedAt', 'DESC']]
+    });
+
+    return res.json({
+      success: true,
+      count: submissions.length,
+      data: submissions
+    });
+  } catch (error) {
+    console.error('List auto-schedule submissions error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching auto-schedule submissions',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Submit auto-schedule recommendations to CAE
+// @route   POST /api/qa/auto-schedule/submit-to-cae
+// @access  Quality Assurance and above
+router.post('/auto-schedule/submit-to-cae', async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { sourcePlanIds, targetYear, notes, department } = req.body;
+    const planIds = Array.isArray(sourcePlanIds) ? sourcePlanIds.filter(Boolean) : [];
+    const scheduleYear = normalizeTargetYear(targetYear);
+    const oneYearAgo = new Date();
+    oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+
+    const where = {
+      status: { [Op.in]: ['approved', 'consolidated', 'implemented'] }
+    };
+    if (department) where.department = department;
+    if (planIds.length > 0) where.id = planIds;
+
+    const sourcePlans = await AuditPlan.findAll({
+      where,
+      include: [{
+        model: RiskAssessment,
+        as: 'riskAssessment',
+        attributes: ['id', 'totalRisks', 'highRiskCount', 'mediumRiskCount', 'lowRiskCount']
+      }],
+      order: [['createdAt', 'DESC']],
+      transaction
+    });
+
+    if (planIds.length > 0 && sourcePlans.length !== planIds.length) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'One or more selected plans were not found'
+      });
+    }
+
+    const historicalPlans = sourcePlans.filter((plan) => {
+      const createdAt = new Date(plan.createdAt);
+      return !Number.isNaN(createdAt.getTime()) && createdAt <= oneYearAgo;
+    });
+
+    if (historicalPlans.length === 0) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'No eligible plans with at least one year history were found for auto-schedule submission'
+      });
+    }
+
+    const latestPlanByKey = new Map();
+    historicalPlans.forEach((plan) => {
+      const key = `${plan.department || ''}::${plan.title || ''}`;
+      const existing = latestPlanByKey.get(key);
+      if (!existing || new Date(plan.createdAt) > new Date(existing.createdAt)) {
+        latestPlanByKey.set(key, plan);
+      }
+    });
+
+    const selectedPlans = Array.from(latestPlanByKey.values());
+    const recommendations = selectedPlans.map((plan) => buildAutoScheduleRecommendation(plan, scheduleYear));
+    const submissionId = `AS-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const submittedAt = new Date();
+
+    const submission = await AutoScheduleSubmission.create({
+      submissionId,
+      scopeDepartment: department || null,
+      targetYear: scheduleYear,
+      status: 'pending_approval',
+      sourcePlanIds: selectedPlans.map((plan) => plan.id),
+      recommendations,
+      notes: notes || null,
+      submittedBy: req.user.id,
+      submittedByName: req.user.name,
+      submittedAt,
+      metadata: {
+        mode: 'recommendation_only',
+        requiresApproval: true
+      }
+    }, { transaction });
+
+    for (const plan of selectedPlans) {
+      const currentMeta = plan.metadata || {};
+      const autoScheduleHistory = Array.isArray(currentMeta?.autoSchedule?.history)
+        ? currentMeta.autoSchedule.history
+        : [];
+
+      await plan.update({
+        metadata: {
+          ...currentMeta,
+          autoSchedule: {
+            ...(currentMeta.autoSchedule || {}),
+            latestSubmission: {
+              submissionId,
+              targetYear: scheduleYear,
+              submittedAt,
+              submittedBy: req.user.id,
+              submittedByName: req.user.name
+            },
+            history: [
+              ...autoScheduleHistory,
+              {
+                submissionId,
+                targetYear: scheduleYear,
+                submittedAt,
+                submittedBy: req.user.id,
+                submittedByName: req.user.name
+              }
+            ]
+          }
+        }
+      }, { transaction });
+    }
+
+    const caeUsers = await User.findAll({
+      where: {
+        isActive: true,
+        role: 'chief_audit_executive'
+      },
+      attributes: ['id', 'name', 'email'],
+      transaction
+    });
+
+    for (const cae of caeUsers) {
+      await Notification.create({
+        userId: cae.id,
+        type: 'approval',
+        title: 'Auto-schedule recommendations awaiting approval',
+        message: `${req.user.name} submitted ${recommendations.length} auto-schedule recommendation(s) for year ${scheduleYear}.`,
+        status: 'unread',
+        metadata: {
+          submissionId,
+          targetYear: scheduleYear,
+          submittedBy: req.user.id,
+          submittedByName: req.user.name,
+          recommendationCount: recommendations.length
+        }
+      }, { transaction });
+    }
+
+    await transaction.commit();
+
+    return res.status(201).json({
+      success: true,
+      message: `Submitted ${recommendations.length} auto-schedule recommendation(s) to CAE`,
+      data: {
+        submissionId,
+        targetYear: scheduleYear,
+        submittedAt,
+        recommendationCount: recommendations.length,
+        sourcePlanIds: selectedPlans.map((plan) => plan.id),
+        caeRecipients: caeUsers.length,
+        status: submission.status
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('Submit auto-schedule to CAE error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error submitting auto-schedule recommendations to CAE',
+      error: error.message
+    });
+  }
+});
 
 // @desc    Submit approved plans to CAE
 // @route   POST /api/qa/submit-to-cae

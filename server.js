@@ -4,6 +4,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const qaRoutes = require('./routes/qualityAssurance');
 const unitHeadRoutes = require('./routes/unitHead');
+const caeRoutes = require('./routes/cae');
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
@@ -37,6 +38,7 @@ const AuditPlanTeamMember = require('./models/AuditPlanTeamMember');
 const DashboardShare = require('./models/DashboardShare');
 const AuditAssignmentTask = require('./models/AuditAssignmentTask');
 const Notification = require('./models/Notification');
+const AutoScheduleSubmission = require('./models/AutoScheduleSubmission');
 
 
 // SET UP ASSOCIATIONS - IMPROVED VERSION
@@ -54,7 +56,8 @@ const setupAssociations = () => {
     AuditPlanTeamMember,
     DashboardShare,
     AuditAssignmentTask,
-    Notification
+    Notification,
+    AutoScheduleSubmission
   };
 
   // Initialize associations for each model that has an associate method
@@ -67,7 +70,8 @@ const setupAssociations = () => {
     AuditPlanTeamMember, 
     DashboardShare,
     AuditAssignmentTask,
-    Notification
+    Notification,
+    AutoScheduleSubmission
   ];
 
   modelsWithAssociations.forEach(model => {
@@ -177,6 +181,7 @@ app.use('/api/auth/', authLimiter);
 
 app.use('/api/qa', qaRoutes);
 app.use('/api/unit-head', unitHeadRoutes);
+app.use('/api/cae', caeRoutes);
 app.use('/api/auth', authRoutes);
 
 // SWAGGER DOCUMENTATION
@@ -220,6 +225,13 @@ app.get('/', (req, res) => {
       'GET  /api/unit-head/approved-plan-data',
       'POST /api/unit-head/approved-plan/:id/assign',
       'GET  /api/unit-head/auto-schedule/recommendations',
+      'GET  /api/qa/auto-schedule/recommendations',
+      'GET  /api/qa/auto-schedule/submissions',
+      'POST /api/qa/auto-schedule/submit-to-cae',
+      'GET  /api/cae/auto-schedule/submissions',
+      'GET  /api/cae/auto-schedule/submissions/:submissionId',
+      'POST /api/cae/auto-schedule/:submissionId/approve',
+      'POST /api/cae/auto-schedule/:submissionId/reject',
       'GET  /api/unit-head/draft-plan-review-data',
       'GET  /api/unit-head/risk-assessments',
       'PUT  /api/unit-head/risk-assessments/:id/finalization',
@@ -322,6 +334,6 @@ app.listen(PORT, () => {
   console.log(`📚 Docs: http://localhost:${PORT}/api-docs`);
   console.log(`💾 Database: PostgreSQL`);
   console.log(`🌐 CORS: Enabled for all origins`);
-  console.log(`📊 Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification`);
+  console.log(`📊 Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification, AutoScheduleSubmission`);
   console.log('========================================');
 });
