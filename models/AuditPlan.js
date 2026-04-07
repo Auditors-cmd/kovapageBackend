@@ -237,6 +237,34 @@ AuditPlan.associate = (models) => {
       onUpdate: 'CASCADE'
     });
   }
+
+  if (models.DocumentRequest) {
+    AuditPlan.hasMany(models.DocumentRequest, {
+      foreignKey: 'auditPlanId',
+      as: 'documentRequests',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
+
+  if (models.GovernanceDocument) {
+    AuditPlan.hasMany(models.GovernanceDocument, {
+      foreignKey: 'auditPlanId',
+      as: 'governanceDocuments',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
+
+  if (models.DocumentComment) {
+    AuditPlan.hasMany(models.DocumentComment, {
+      foreignKey: 'auditPlanId',
+      as: 'documentComments',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
+
 };
 
 module.exports = AuditPlan;

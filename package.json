@@ -9,13 +9,16 @@
     "dev": "nodemon server.js",
     "db:setup": "node scripts/setup-database.js",
     "test:docs": "node scripts/verify-documentation.js",
-    "check:coverage": "node scripts/compare-docs.js"
+    "check:coverage": "node scripts/compare-docs.js",
+    "test:endpoints": "node scripts/test-endpoints.js",
+    "cleanup:endpoints": "node scripts/cleanup-endpoint-test-data.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@supabase/supabase-js": "^2.101.1",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^1.41.3",
     "compression": "^1.8.1",

@@ -3606,6 +3606,502 @@ Complete audit management system with 8 specialized user roles, OTP and password
   }
 };
 
+const ensureSwaggerTag = (name, description) => {
+  if (!swaggerDocument.tags.some((tag) => tag.name === name)) {
+    swaggerDocument.tags.push({ name, description });
+  }
+};
+
+ensureSwaggerTag('Audit Operations', 'Assignment, governance document, and review operations for audit teams');
+ensureSwaggerTag('Auditee', 'Auditee dashboard, uploads, comments, and governance document endpoints');
+
+Object.assign(swaggerDocument.components.schemas, {
+  AssignmentProcedure: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', example: 'procedure-1' },
+      title: { type: 'string', example: 'Review access controls' },
+      description: { type: 'string', nullable: true },
+      area: { type: 'string', example: 'Area 1' },
+      status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'blocked', 'submitted'] },
+      completionPercentage: { type: 'integer', example: 55 },
+      workingNotes: { type: 'string', nullable: true },
+      evidenceSummary: { type: 'string', nullable: true }
+    }
+  },
+  AuditAssignmentTaskResponse: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      assignmentRole: { type: 'string', enum: ['team_lead', 'team_member'] },
+      status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled', 'reassigned'] },
+      dueDate: { type: 'string', format: 'date-time', nullable: true },
+      auditPlan: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', format: 'uuid' },
+          planNumber: { type: 'string' },
+          title: { type: 'string' },
+          department: { type: 'string', nullable: true }
+        }
+      },
+      procedureSummary: {
+        type: 'object',
+        properties: {
+          total: { type: 'integer' },
+          pending: { type: 'integer' },
+          inProgress: { type: 'integer' },
+          completed: { type: 'integer' },
+          blocked: { type: 'integer' },
+          averageCompletion: { type: 'integer' }
+        }
+      },
+      procedures: {
+        type: 'array',
+        items: { $ref: '#/components/schemas/AssignmentProcedure' }
+      }
+    }
+  },
+  DocumentRequestPayload: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      requestNumber: { type: 'string', example: 'DR-1775538916279-567' },
+      title: { type: 'string' },
+      description: { type: 'string', nullable: true },
+      category: { type: 'string', example: 'governance' },
+      priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+      status: { type: 'string', enum: ['pending_upload', 'uploaded', 'under_review', 'approved', 'rejected', 'overdue', 'cancelled'] },
+      recipientEmail: { type: 'string', format: 'email', nullable: true },
+      folderName: { type: 'string', nullable: true },
+      folderKey: { type: 'string', nullable: true },
+      requestedItems: { type: 'array', items: { type: 'object' } }
+    }
+  },
+  GovernanceDocumentPayload: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      title: { type: 'string' },
+      folderName: { type: 'string', nullable: true },
+      folderKey: { type: 'string', nullable: true },
+      fileUrl: { type: 'string' },
+      originalFileName: { type: 'string' },
+      versionNumber: { type: 'integer' }
+    }
+  },
+  DocumentCommentPayload: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      body: { type: 'string' },
+      visibility: { type: 'string', enum: ['internal', 'shared'] },
+      createdAt: { type: 'string', format: 'date-time' }
+    }
+  }
+});
+
+Object.assign(swaggerDocument.paths, {
+  '/api/audit/dashboard': {
+    get: {
+      summary: 'Get audit operations dashboard',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      responses: { '200': { description: 'Dashboard retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/audit/my-audits': {
+    get: {
+      summary: 'Get my assigned audits',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      responses: { '200': { description: 'Assigned audits retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/audit/my-assignments': {
+    get: {
+      summary: 'List my assignment tasks',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string' } },
+        { name: 'assignmentRole', in: 'query', schema: { type: 'string', enum: ['team_lead', 'team_member'] } },
+        { name: 'activeOnly', in: 'query', schema: { type: 'string', enum: ['true', 'false'] } },
+        { name: 'search', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Assignments retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/audit/my-assignments/{id}': {
+    get: {
+      summary: 'Get one assignment task',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Assignment retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/my-assignments/{id}/procedures': {
+    get: {
+      summary: 'List assignment procedures',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Assignment procedures retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    post: {
+      summary: 'Add assignment procedure',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['title'],
+              properties: {
+                title: { type: 'string' },
+                description: { type: 'string' },
+                area: { type: 'string' },
+                dueDate: { type: 'string', format: 'date-time' },
+                controlReference: { type: 'string' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '201': { description: 'Procedure added' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/my-assignments/{id}/status': {
+    patch: {
+      summary: 'Update assignment status',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['status'],
+              properties: { status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'cancelled'] } }
+            }
+          }
+        }
+      },
+      responses: { '200': { description: 'Assignment status updated' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/my-assignments/{id}/procedures/{procedureId}': {
+    put: {
+      summary: 'Update assignment procedure',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'procedureId', in: 'path', required: true, schema: { type: 'string' } }
+      ],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                description: { type: 'string' },
+                status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'blocked', 'submitted'] },
+                completionPercentage: { type: 'integer' },
+                workingNotes: { type: 'string' },
+                evidenceSummary: { type: 'string' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '200': { description: 'Procedure updated' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    delete: {
+      summary: 'Delete assignment procedure',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'procedureId', in: 'path', required: true, schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Procedure deleted' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/my-assignments/{id}/submit': {
+    post: {
+      summary: 'Submit assignment for review',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: false,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                targetRole: { type: 'string', enum: ['team_lead', 'quality_assurance', 'chief_audit_executive'] },
+                notes: { type: 'string' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '200': { description: 'Assignment submitted for review' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  }
+});
+
+Object.assign(swaggerDocument.paths, {
+  '/api/audit/document-requests': {
+    get: {
+      summary: 'List governance document requests',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      responses: { '200': { description: 'Document requests retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+    },
+    post: {
+      summary: 'Create governance document request',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['title', 'assignedTo'],
+              properties: {
+                title: { type: 'string' },
+                description: { type: 'string' },
+                category: { type: 'string' },
+                priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+                assignedTo: { type: 'string', format: 'uuid' },
+                auditPlanId: { type: 'string', format: 'uuid' },
+                recipientEmail: { type: 'string', format: 'email' },
+                folderName: { type: 'string' },
+                folderKey: { type: 'string' },
+                dueDate: { type: 'string', format: 'date-time' },
+                documentTitles: { type: 'array', items: { type: 'string' } }
+              }
+            }
+          }
+        }
+      },
+      responses: { '201': { description: 'Document request created' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    }
+  },
+  '/api/audit/document-requests/{id}': {
+    get: {
+      summary: 'Get one governance document request',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Document request retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/document-requests/{id}/comments': {
+    get: {
+      summary: 'List request comments',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Comments retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    post: {
+      summary: 'Add request comment',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['body'],
+              properties: {
+                body: { type: 'string' },
+                visibility: { type: 'string', enum: ['internal', 'shared'] },
+                governanceDocumentId: { type: 'string', format: 'uuid' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '201': { description: 'Comment added' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/document-requests/{id}/review': {
+    post: {
+      summary: 'Review governance document request submission',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['decision'],
+              properties: {
+                decision: { type: 'string', enum: ['approved', 'rejected', 'under_review'] },
+                comments: { type: 'string' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '200': { description: 'Review recorded' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/document-requests/{id}/remind': {
+    post: {
+      summary: 'Send governance document request reminder',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Reminder sent' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/governance-documents': {
+    get: {
+      summary: 'List governance documents',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'requestId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+        { name: 'auditPlanId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+        { name: 'assignedTo', in: 'query', schema: { type: 'string', format: 'uuid' } },
+        { name: 'folderKey', in: 'query', schema: { type: 'string' } },
+        { name: 'latestOnly', in: 'query', schema: { type: 'string', enum: ['true', 'false'] } }
+      ],
+      responses: { '200': { description: 'Governance documents retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+    }
+  },
+  '/api/audit/governance-documents/{id}': {
+    get: {
+      summary: 'Get one governance document',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Governance document retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/auditee/dashboard': {
+    get: {
+      summary: 'Get auditee dashboard',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      responses: { '200': { description: 'Auditee dashboard retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/auditee/document-requests': {
+    get: {
+      summary: 'List auditee document requests',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      responses: { '200': { description: 'Auditee document requests retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/auditee/document-requests/{id}': {
+    get: {
+      summary: 'Get one auditee document request',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Auditee document request retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/auditee/document-requests/{id}/comments': {
+    get: {
+      summary: 'List auditee request comments',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Auditee comments retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    post: {
+      summary: 'Add auditee request comment',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['body'],
+              properties: {
+                body: { type: 'string' },
+                governanceDocumentId: { type: 'string', format: 'uuid' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '201': { description: 'Auditee comment added' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/auditee/document-requests/{id}/upload': {
+    post: {
+      summary: 'Upload governance document for request',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'multipart/form-data': {
+            schema: {
+              type: 'object',
+              required: ['documentFile'],
+              properties: {
+                title: { type: 'string' },
+                description: { type: 'string' },
+                documentFile: { type: 'string', format: 'binary' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '200': { description: 'Document uploaded' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/auditee/governance-documents': {
+    get: {
+      summary: 'List auditee governance documents',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'requestId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+        { name: 'folderKey', in: 'query', schema: { type: 'string' } },
+        { name: 'latestOnly', in: 'query', schema: { type: 'string', enum: ['true', 'false'] } }
+      ],
+      responses: { '200': { description: 'Auditee governance documents retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+    }
+  },
+  '/api/auditee/notifications': {
+    get: {
+      summary: 'List auditee notifications',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      responses: { '200': { description: 'Auditee notifications retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+    }
+  }
+});
+
 const swaggerOptions = {
   explorer: true,
   customCss: `

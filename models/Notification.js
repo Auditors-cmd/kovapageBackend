@@ -23,6 +23,14 @@ const Notification = sequelize.define('Notification', {
       key: 'id'
     }
   },
+  documentRequestId: {
+    type: DataTypes.UUID,
+    allowNull: true,
+    references: {
+      model: 'document_requests',
+      key: 'id'
+    }
+  },
   type: {
     type: DataTypes.ENUM('assignment', 'approval', 'reminder', 'system'),
     defaultValue: 'system'
@@ -46,18 +54,12 @@ const Notification = sequelize.define('Notification', {
 }, {
   tableName: 'notifications',
   indexes: [
-    {
-      fields: ['userId']
-    },
-    {
-      fields: ['status']
-    },
-    {
-      fields: ['type']
-    },
-    {
-      fields: ['createdAt']
-    }
+    { fields: ['userId'] },
+    { fields: ['auditPlanId'] },
+    { fields: ['documentRequestId'] },
+    { fields: ['status'] },
+    { fields: ['type'] },
+    { fields: ['createdAt'] }
   ]
 });
 
@@ -75,6 +77,15 @@ Notification.associate = (models) => {
     onDelete: 'SET NULL',
     onUpdate: 'CASCADE'
   });
+
+  if (models.DocumentRequest) {
+    Notification.belongsTo(models.DocumentRequest, {
+      foreignKey: 'documentRequestId',
+      as: 'documentRequest',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
 };
 
 module.exports = Notification;

@@ -5,6 +5,8 @@ const rateLimit = require('express-rate-limit');
 const qaRoutes = require('./routes/qualityAssurance');
 const unitHeadRoutes = require('./routes/unitHead');
 const caeRoutes = require('./routes/cae');
+const auditRoutes = require('./routes/audit');
+const auditeeRoutes = require('./routes/auditee');
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
@@ -39,6 +41,9 @@ const DashboardShare = require('./models/DashboardShare');
 const AuditAssignmentTask = require('./models/AuditAssignmentTask');
 const Notification = require('./models/Notification');
 const AutoScheduleSubmission = require('./models/AutoScheduleSubmission');
+const DocumentRequest = require('./models/DocumentRequest');
+const GovernanceDocument = require('./models/GovernanceDocument');
+const DocumentComment = require('./models/DocumentComment');
 
 
 // SET UP ASSOCIATIONS - IMPROVED VERSION
@@ -57,7 +62,10 @@ const setupAssociations = () => {
     DashboardShare,
     AuditAssignmentTask,
     Notification,
-    AutoScheduleSubmission
+    AutoScheduleSubmission,
+    DocumentRequest,
+    GovernanceDocument,
+    DocumentComment
   };
 
   // Initialize associations for each model that has an associate method
@@ -71,7 +79,10 @@ const setupAssociations = () => {
     DashboardShare,
     AuditAssignmentTask,
     Notification,
-    AutoScheduleSubmission
+    AutoScheduleSubmission,
+    DocumentRequest,
+    GovernanceDocument,
+    DocumentComment
   ];
 
   modelsWithAssociations.forEach(model => {
@@ -133,8 +144,6 @@ const initializeDatabase = async () => {
   }
 };
 
-// Initialize database
-initializeDatabase();
 
 
 // MIDDLEWARE
@@ -182,6 +191,8 @@ app.use('/api/auth/', authLimiter);
 app.use('/api/qa', qaRoutes);
 app.use('/api/unit-head', unitHeadRoutes);
 app.use('/api/cae', caeRoutes);
+app.use('/api/audit', auditRoutes);
+app.use('/api/auditee', auditeeRoutes);
 app.use('/api/auth', authRoutes);
 
 // SWAGGER DOCUMENTATION
@@ -251,7 +262,12 @@ app.get('/', (req, res) => {
       'GET  /api/qa/audit-plans/export-excel',
       'GET  /api/qa/audit-plans/export-pdf',
       'POST /api/qa/submit-to-cae',
-      'POST /api/qa/consolidate-plans'
+      'POST /api/qa/consolidate-plans',
+      'GET  /api/audit/document-requests',
+      'POST /api/audit/document-requests',
+      'GET  /api/audit/governance-documents',
+      'GET  /api/auditee/document-requests',
+      'GET  /api/auditee/governance-documents'
     ],
     timestamp: new Date().toISOString()
   });
@@ -323,17 +339,25 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log('========================================');
-  console.log('🚀 KOVAPAGE BACKEND SERVER');
-  console.log('========================================');
-  console.log(`📡 Server running on port ${PORT}`);
-  console.log(`🏠 Local: http://localhost:${PORT}/`);
-  console.log(`🔍 Health: http://localhost:${PORT}/api/health`);
-  console.log(`📚 Docs: http://localhost:${PORT}/api-docs`);
-  console.log(`💾 Database: PostgreSQL`);
-  console.log(`🌐 CORS: Enabled for all origins`);
-  console.log(`📊 Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification, AutoScheduleSubmission`);
-  console.log('========================================');
+const startServer = async () => {
+  await initializeDatabase();
+
+  app.listen(PORT, () => {
+    console.log('========================================');
+    console.log('???? KOVAPAGE BACKEND SERVER');
+    console.log('========================================');
+    console.log(`???? Server running on port ${PORT}`);
+    console.log(`???? Local: http://localhost:${PORT}/`);
+    console.log(`???? Health: http://localhost:${PORT}/api/health`);
+    console.log(`???? Docs: http://localhost:${PORT}/api-docs`);
+    console.log(`???? Database: PostgreSQL`);
+    console.log(`???? CORS: Enabled for all origins`);
+    console.log(`???? Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification, AutoScheduleSubmission, DocumentRequest, GovernanceDocument, DocumentComment`);
+    console.log('========================================');
+  });
+};
+
+startServer().catch((error) => {
+  console.error('Failed to start server:', error);
+  process.exit(1);
 });

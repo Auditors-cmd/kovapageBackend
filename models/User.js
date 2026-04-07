@@ -302,6 +302,29 @@ User.associate = (models) => {
     });
   }
 
+  if (models.DocumentRequest) {
+    User.hasMany(models.DocumentRequest, {
+      foreignKey: 'requestedBy',
+      as: 'createdDocumentRequests',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+
+    User.hasMany(models.DocumentRequest, {
+      foreignKey: 'assignedTo',
+      as: 'assignedDocumentRequests',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+
+    User.hasMany(models.DocumentRequest, {
+      foreignKey: 'reviewedBy',
+      as: 'reviewedDocumentRequests',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
+
   if (models.AutoScheduleSubmission) {
     User.hasMany(models.AutoScheduleSubmission, {
       foreignKey: 'submittedBy',
@@ -317,6 +340,25 @@ User.associate = (models) => {
       onUpdate: 'CASCADE'
     });
   }
+
+  if (models.GovernanceDocument) {
+    User.hasMany(models.GovernanceDocument, {
+      foreignKey: 'uploadedBy',
+      as: 'uploadedGovernanceDocuments',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+  }
+
+  if (models.DocumentComment) {
+    User.hasMany(models.DocumentComment, {
+      foreignKey: 'authorId',
+      as: 'documentComments',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+  }
+
 };
 
 module.exports = User;

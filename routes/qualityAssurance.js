@@ -1142,7 +1142,7 @@ router.get('/dashboard-data', async (req, res) => {
     }
 
     try {
-      reportsToReview = await AuditPlan.count({ where: { status: 'ready_for_review' } }) || 0;
+      reportsToReview = await AuditPlan.count({ where: { status: 'consolidated' } }) || 0;
     } catch (err) {
       console.log('Error counting reports to review:', err.message);
     }
