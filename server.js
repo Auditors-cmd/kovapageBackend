@@ -20,8 +20,8 @@ const envCandidates = [
 const envPath = envCandidates.find((candidate) => fs.existsSync(candidate));
 dotenv.config(envPath ? { path: envPath } : undefined);
 
-console.log('🔍 DATABASE_URL exists:', !!process.env.DATABASE_URL);
-console.log('🔍 NODE_ENV:', process.env.NODE_ENV);
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('NODE_ENV:', process.env.NODE_ENV);
 
 
 // DATABASE CONNECTION
@@ -49,7 +49,7 @@ const DocumentComment = require('./models/DocumentComment');
 // SET UP ASSOCIATIONS - IMPROVED VERSION
 
 const setupAssociations = () => {
-  console.log('🔗 Setting up model associations...');
+  console.log('Setting up model associations...');
   
   // Create a models object with all models
   const models = {
@@ -88,18 +88,18 @@ const setupAssociations = () => {
   modelsWithAssociations.forEach(model => {
     if (model.associate) {
       model.associate(models);
-      console.log(`✅ ${model.name} associations loaded`);
+      console.log(`${model.name} associations loaded`);
     }
   });
 
   // Specifically log AuditPlan associations to verify
   if (AuditPlan.associate) {
-    console.log('✅ AuditPlan associations verified');
+    console.log('AuditPlan associations verified');
   } else {
-    console.log('⚠️ AuditPlan.associate method not found!');
+    console.log('WARNING: AuditPlan.associate method not found!');
   }
 
-  console.log('✅ All model associations initialized');
+  console.log('All model associations initialized');
 };
 
 // Run associations setup
@@ -132,14 +132,14 @@ const initializeDatabase = async () => {
     
     // Sync all models with associations
     await sequelize.sync({ alter: true });
-    console.log('✅ PostgreSQL tables synced successfully');
+    console.log('PostgreSQL tables synced successfully');
     
     // Log which tables were created/updated
     const tables = await sequelize.getQueryInterface().showAllTables();
-    console.log('📊 Available tables:', tables.join(', '));
+    console.log('Available tables:', tables.join(', '));
     
   } catch (error) {
-    console.error('❌ Database initialization error:', error);
+    console.error('Database initialization error:', error);
     process.exit(1);
   }
 };
@@ -200,7 +200,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument, swaggerOp
 
 // REQUEST LOGGING
 app.use((req, res, next) => {
-  console.log('📨', req.method, req.url, {
+  console.log('REQUEST', req.method, req.url, {
     ip: req.ip,
     timestamp: new Date().toISOString()
   });
@@ -306,7 +306,7 @@ app.get('/api/test', (req, res) => {
 
 // 404 handler
 app.use((req, res) => {
-  console.log('❌ Route not found:', req.originalUrl);
+  console.log('Route not found:', req.originalUrl);
   res.status(404).json({
     success: false,
     message: 'Route not found: ' + req.originalUrl
@@ -315,7 +315,7 @@ app.use((req, res) => {
 
 // Error handler
 app.use((error, req, res, next) => {
-  console.error('💥 Server error:', error);
+  console.error('Server error:', error);
   
   // Send more detailed error in development
   if (process.env.NODE_ENV === 'development') {
@@ -344,15 +344,15 @@ const startServer = async () => {
 
   app.listen(PORT, () => {
     console.log('========================================');
-    console.log('???? KOVAPAGE BACKEND SERVER');
+    console.log('KOVAPAGE BACKEND SERVER');
     console.log('========================================');
-    console.log(`???? Server running on port ${PORT}`);
-    console.log(`???? Local: http://localhost:${PORT}/`);
-    console.log(`???? Health: http://localhost:${PORT}/api/health`);
-    console.log(`???? Docs: http://localhost:${PORT}/api-docs`);
-    console.log(`???? Database: PostgreSQL`);
-    console.log(`???? CORS: Enabled for all origins`);
-    console.log(`???? Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification, AutoScheduleSubmission, DocumentRequest, GovernanceDocument, DocumentComment`);
+    console.log(`Server running on port ${PORT}`);
+    console.log(`Local: http://localhost:${PORT}/`);
+    console.log(`Health: http://localhost:${PORT}/api/health`);
+    console.log(`Docs: http://localhost:${PORT}/api-docs`);
+    console.log('Database: PostgreSQL');
+    console.log('CORS: Enabled for all origins');
+    console.log('Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification, AutoScheduleSubmission, DocumentRequest, GovernanceDocument, DocumentComment');
     console.log('========================================');
   });
 };
