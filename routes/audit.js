@@ -7,6 +7,7 @@ const DocumentRequest = require('../models/DocumentRequest');
 const GovernanceDocument = require('../models/GovernanceDocument');
 const DocumentComment = require('../models/DocumentComment');
 const Notification = require('../models/Notification');
+const AuditNotification = require('../models/AuditNotification');
 const User = require('../models/User');
 const AuditPlan = require('../models/AuditPlan');
 
@@ -17,6 +18,15 @@ router.use(protect);
 const TASK_STATUS_VALUES = ['pending', 'in_progress', 'completed', 'cancelled'];
 const PROCEDURE_STATUS_VALUES = ['pending', 'in_progress', 'completed', 'blocked', 'submitted'];
 const REVIEW_TARGET_ROLE_VALUES = ['team_lead', 'quality_assurance', 'chief_audit_executive'];
+const AUDIT_NOTIFICATION_TYPE_VALUES = ['opening_meeting', 'closing_meeting', 'fieldwork_notice', 'document_deadline', 'general'];
+const AUDIT_NOTIFICATION_RESPONSE_VALUES = ['pending', 'confirmed', 'change_requested', 'declined'];
+const AUDIT_NOTIFICATION_LABELS = {
+  opening_meeting: 'Opening Meeting',
+  closing_meeting: 'Closing Meeting',
+  fieldwork_notice: 'Fieldwork Notice',
+  document_deadline: 'Document Deadline',
+  general: 'Audit Notice'
+};
 
 const clampPercent = (value) => {
   const parsed = Number(value);
@@ -61,6 +71,76 @@ const canAccessAssignmentTask = (task, user) => {
   if (user.department && task.auditPlan?.department && user.department === task.auditPlan.department) return true;
   return false;
 };
+
+const toValidDate = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const buildAuditNotificationLabel = (type, override) => override || AUDIT_NOTIFICATION_LABELS[type] || AUDIT_NOTIFICATION_LABELS.general;
+
+const canViewAuditNotification = (notification, user) => {
+  if (!notification) return false;
+  if (notification.createdBy === user.id) return true;
+  if (notification.auditeeUserId === user.id) return true;
+  if (['quality_assurance', 'unit_head', 'bac_secretariat', 'chief_audit_executive'].includes(user.role)) return true;
+  if (notification.auditPlan?.teamLeadId && notification.auditPlan.teamLeadId === user.id) return true;
+  if (Array.isArray(notification.auditPlan?.teamMemberIds) && notification.auditPlan.teamMemberIds.includes(user.id)) return true;
+  if (user.department && notification.auditPlan?.department && user.department === notification.auditPlan.department) return true;
+  return false;
+};
+
+const serializeAuditNotification = (notification) => ({
+  id: notification.id,
+  auditPlanId: notification.auditPlanId,
+  auditeeUserId: notification.auditeeUserId,
+  createdBy: notification.createdBy,
+  title: notification.title,
+  notificationType: notification.notificationType,
+  badgeLabel: buildAuditNotificationLabel(notification.notificationType, notification.badgeLabel),
+  scheduledAt: notification.scheduledAt,
+  locationOrMode: notification.locationOrMode,
+  message: notification.message,
+  status: notification.status,
+  responseStatus: notification.responseStatus,
+  responseComment: notification.responseComment,
+  proposedScheduledAt: notification.proposedScheduledAt,
+  respondedAt: notification.respondedAt,
+  lastReminderAt: notification.lastReminderAt,
+  isActive: notification.isActive,
+  canConfirmAvailability: notification.isActive && notification.status === 'scheduled' && notification.responseStatus !== 'confirmed',
+  canRequestChange: notification.isActive && notification.status === 'scheduled',
+  creator: notification.creator
+    ? {
+        id: notification.creator.id,
+        name: notification.creator.name,
+        email: notification.creator.email || null,
+        role: notification.creator.role,
+        department: notification.creator.department || null
+      }
+    : null,
+  auditee: notification.auditee
+    ? {
+        id: notification.auditee.id,
+        name: notification.auditee.name,
+        email: notification.auditee.email || null,
+        role: notification.auditee.role,
+        department: notification.auditee.department || null
+      }
+    : null,
+  auditPlan: notification.auditPlan
+    ? {
+        id: notification.auditPlan.id,
+        planNumber: notification.auditPlan.planNumber,
+        title: notification.auditPlan.title,
+        department: notification.auditPlan.department || null,
+        teamLeadId: notification.auditPlan.teamLeadId || null,
+        teamMemberIds: Array.isArray(notification.auditPlan.teamMemberIds) ? notification.auditPlan.teamMemberIds : []
+      }
+    : null,
+  metadata: notification.metadata || {}
+});
 
 const normalizeRequestedItems = (title, documentTitles) => {
   if (Array.isArray(documentTitles) && documentTitles.length > 0) {
@@ -271,6 +351,27 @@ const requestInclude = [
   { model: User, as: 'reviewer', attributes: ['id', 'name', 'role', 'department'] },
   { model: AuditPlan, as: 'auditPlan', attributes: ['id', 'planNumber', 'title'] }
 ];
+
+const auditNotificationInclude = [
+  { model: User, as: 'creator', attributes: ['id', 'name', 'email', 'role', 'department'] },
+  { model: User, as: 'auditee', attributes: ['id', 'name', 'email', 'role', 'department'] },
+  { model: AuditPlan, as: 'auditPlan', attributes: ['id', 'planNumber', 'title', 'department', 'teamLeadId', 'teamMemberIds'] }
+];
+
+const findAuditNotificationRecipients = async (notification, currentUser) => {
+  const recipientIds = Array.from(new Set([
+    notification.createdBy,
+    notification.auditPlan?.teamLeadId,
+    ...(Array.isArray(notification.auditPlan?.teamMemberIds) ? notification.auditPlan.teamMemberIds : [])
+  ].filter(Boolean))).filter((id) => id !== currentUser.id);
+
+  if (recipientIds.length === 0) return [];
+
+  return User.findAll({
+    where: { id: recipientIds, isActive: true },
+    attributes: ['id', 'name', 'role', 'department']
+  });
+};
 
 const findReviewRecipients = async (task, targetRole, currentUser) => {
   if (targetRole === 'team_lead') {
@@ -697,6 +798,152 @@ router.post('/users', hasRoleLevel('bac_secretariat'), async (req, res) => {
       createdBy: req.user.id
     }
   });
+});
+
+router.post('/audit-notifications', hasRoleLevel('team_member'), async (req, res) => {
+  try {
+    const {
+      auditeeUserId,
+      auditPlanId,
+      title,
+      notificationType = 'opening_meeting',
+      badgeLabel,
+      scheduledAt,
+      locationOrMode,
+      message,
+      metadata
+    } = req.body || {};
+
+    if (!auditeeUserId || !title || !scheduledAt) {
+      return res.status(400).json({ success: false, message: 'Please provide auditeeUserId, title, and scheduledAt' });
+    }
+
+    if (!AUDIT_NOTIFICATION_TYPE_VALUES.includes(notificationType)) {
+      return res.status(400).json({ success: false, message: 'Invalid notificationType supplied' });
+    }
+
+    const scheduledDate = toValidDate(scheduledAt);
+    if (!scheduledDate) {
+      return res.status(400).json({ success: false, message: 'scheduledAt must be a valid date' });
+    }
+
+    const auditee = await User.findByPk(auditeeUserId, {
+      attributes: ['id', 'name', 'email', 'role', 'department', 'isActive']
+    });
+
+    if (!auditee || !auditee.isActive || auditee.role !== 'auditee') {
+      return res.status(404).json({ success: false, message: 'Auditee not found' });
+    }
+
+    const linkedAuditPlan = auditPlanId
+      ? await AuditPlan.findByPk(auditPlanId, {
+          attributes: ['id', 'planNumber', 'title', 'department', 'teamLeadId', 'teamMemberIds']
+        })
+      : null;
+
+    if (auditPlanId && !linkedAuditPlan) {
+      return res.status(404).json({ success: false, message: 'Audit plan not found' });
+    }
+
+    const notification = await AuditNotification.create({
+      auditeeUserId: auditee.id,
+      createdBy: req.user.id,
+      auditPlanId: linkedAuditPlan?.id || null,
+      title: String(title).trim(),
+      notificationType,
+      badgeLabel: buildAuditNotificationLabel(notificationType, badgeLabel),
+      scheduledAt: scheduledDate,
+      locationOrMode: locationOrMode || null,
+      message: message || null,
+      metadata: {
+        ...(metadata || {}),
+        createdByName: req.user.name,
+        createdByRole: req.user.role
+      }
+    });
+
+    await Notification.create({
+      userId: auditee.id,
+      auditPlanId: notification.auditPlanId || null,
+      auditNotificationId: notification.id,
+      type: 'reminder',
+      title: buildAuditNotificationLabel(notification.notificationType, notification.badgeLabel),
+      message: req.user.name + ' scheduled ' + buildAuditNotificationLabel(notification.notificationType, notification.badgeLabel).toLowerCase() + ' for ' + notification.title + '.',
+      status: 'unread',
+      metadata: {
+        auditNotificationId: notification.id,
+        notificationType: notification.notificationType,
+        scheduledAt: notification.scheduledAt,
+        createdBy: req.user.id,
+        createdByName: req.user.name
+      }
+    });
+
+    const hydrated = await AuditNotification.findByPk(notification.id, { include: auditNotificationInclude });
+    return res.status(201).json({
+      success: true,
+      message: 'Audit notification created successfully',
+      data: serializeAuditNotification(hydrated)
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Error creating audit notification', error: error.message });
+  }
+});
+
+router.get('/audit-notifications', hasRoleLevel('team_member'), async (req, res) => {
+  try {
+    const { responseStatus, notificationType, auditeeUserId, auditPlanId, activeOnly = 'true', search } = req.query;
+    const where = {};
+    if (AUDIT_NOTIFICATION_RESPONSE_VALUES.includes(responseStatus)) where.responseStatus = responseStatus;
+    if (AUDIT_NOTIFICATION_TYPE_VALUES.includes(notificationType)) where.notificationType = notificationType;
+    if (auditeeUserId) where.auditeeUserId = auditeeUserId;
+    if (auditPlanId) where.auditPlanId = auditPlanId;
+    if (activeOnly === 'true') where.isActive = true;
+
+    const notifications = await AuditNotification.findAll({
+      where,
+      include: auditNotificationInclude,
+      order: [['scheduledAt', 'ASC'], ['createdAt', 'DESC']]
+    });
+
+    let filtered = notifications.filter((item) => canViewAuditNotification(item, req.user));
+    if (search) {
+      const q = String(search).toLowerCase();
+      filtered = filtered.filter((item) =>
+        (item.title || '').toLowerCase().includes(q) ||
+        (item.message || '').toLowerCase().includes(q) ||
+        (item.auditee?.name || '').toLowerCase().includes(q) ||
+        (item.auditPlan?.title || '').toLowerCase().includes(q)
+      );
+    }
+
+    const serialized = filtered.map(serializeAuditNotification);
+    return res.json({
+      success: true,
+      count: serialized.length,
+      summary: {
+        pending: serialized.filter((item) => item.responseStatus === 'pending').length,
+        confirmed: serialized.filter((item) => item.responseStatus === 'confirmed').length,
+        changeRequested: serialized.filter((item) => item.responseStatus === 'change_requested').length
+      },
+      data: serialized
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Error fetching audit notifications', error: error.message });
+  }
+});
+
+router.get('/audit-notifications/:id', hasRoleLevel('team_member'), async (req, res) => {
+  try {
+    const notification = await AuditNotification.findByPk(req.params.id, { include: auditNotificationInclude });
+    if (!notification || !canViewAuditNotification(notification, req.user)) {
+      return res.status(404).json({ success: false, message: 'Audit notification not found' });
+    }
+
+    return res.json({ success: true, data: serializeAuditNotification(notification) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Error fetching audit notification', error: error.message });
+  }
 });
 
 router.post('/document-requests', hasRoleLevel('team_member'), async (req, res) => {

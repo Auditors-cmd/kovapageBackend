@@ -6,7 +6,9 @@ const RiskAssessment = require('../models/RiskAssessment');
 const AuditPlan = require('../models/AuditPlan');
 const MonitoringDashboard = require('../models/MonitoringDashboard');
 const Notification = require('../models/Notification');
+const AuditNotification = require('../models/AuditNotification');
 const AutoScheduleSubmission = require('../models/AutoScheduleSubmission');
+const AnnualAuditPlan = require('../models/AnnualAuditPlan');
 
 const endpointEmailPattern = 'endpoint-%@example.com';
 const endpointResetPattern = 'endpoint-reset-%@example.com';
@@ -14,6 +16,7 @@ const endpointDepartmentPrefix = 'Endpoint QA %';
 const endpointTitlePrefix = 'Endpoint %';
 const endpointPlanPrefix = 'EP-PLAN-%';
 const endpointApmPrefix = 'APM-EP-%';
+const endpointNoticeLabelPrefix = 'Endpoint Opening Meeting%';
 
 const run = async () => {
   try {
@@ -32,11 +35,37 @@ const run = async () => {
     const userIds = endpointUsers.map((user) => user.id);
     const userEmails = endpointUsers.map((user) => user.email);
 
+    const auditNotifications = await AuditNotification.findAll({
+      where: {
+        [Op.or]: [
+          userIds.length > 0 ? { auditeeUserId: { [Op.in]: userIds } } : null,
+          userIds.length > 0 ? { createdBy: { [Op.in]: userIds } } : null,
+          { title: { [Op.like]: endpointTitlePrefix } },
+          { badgeLabel: { [Op.like]: endpointNoticeLabelPrefix } }
+        ].filter(Boolean)
+      },
+      attributes: ['id']
+    });
+
+    const auditNotificationIds = auditNotifications.map((item) => item.id);
+
     await Notification.destroy({
       where: {
         [Op.or]: [
           userIds.length > 0 ? { userId: { [Op.in]: userIds } } : null,
+          auditNotificationIds.length > 0 ? { auditNotificationId: { [Op.in]: auditNotificationIds } } : null,
           { title: { [Op.like]: 'Auto-schedule submission %' } }
+        ].filter(Boolean)
+      }
+    });
+
+    await AuditNotification.destroy({
+      where: {
+        [Op.or]: [
+          userIds.length > 0 ? { auditeeUserId: { [Op.in]: userIds } } : null,
+          userIds.length > 0 ? { createdBy: { [Op.in]: userIds } } : null,
+          { title: { [Op.like]: endpointTitlePrefix } },
+          { badgeLabel: { [Op.like]: endpointNoticeLabelPrefix } }
         ].filter(Boolean)
       }
     });
@@ -50,6 +79,20 @@ const run = async () => {
         ].filter(Boolean)
       }
     });
+
+    try {
+      await AnnualAuditPlan.destroy({
+        where: {
+          [Op.or]: [
+            { title: { [Op.like]: endpointTitlePrefix } },
+            { planNumber: { [Op.like]: 'AAP-%' } },
+            userIds.length > 0 ? { createdBy: { [Op.in]: userIds } } : null
+          ].filter(Boolean)
+        }
+      });
+    } catch (error) {
+      if (error?.original?.code !== '42P01') throw error;
+    }
 
     await AuditPlan.destroy({
       where: {

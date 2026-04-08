@@ -6,12 +6,21 @@ const DocumentRequest = require('../models/DocumentRequest');
 const GovernanceDocument = require('../models/GovernanceDocument');
 const DocumentComment = require('../models/DocumentComment');
 const Notification = require('../models/Notification');
+const AuditNotification = require('../models/AuditNotification');
 const User = require('../models/User');
 const AuditPlan = require('../models/AuditPlan');
 
 const router = express.Router();
 
 router.use(protect);
+
+const AUDIT_NOTIFICATION_LABELS = {
+  opening_meeting: 'Opening Meeting',
+  closing_meeting: 'Closing Meeting',
+  fieldwork_notice: 'Fieldwork Notice',
+  document_deadline: 'Document Deadline',
+  general: 'Audit Notice'
+};
 
 const ensureAuditee = (req, res, next) => {
   if (req.user.role !== 'auditee') {
@@ -101,6 +110,45 @@ const serializeGovernanceDocument = (document) => ({
     : null
 });
 
+const buildAuditNotificationLabel = (type, override) => override || AUDIT_NOTIFICATION_LABELS[type] || AUDIT_NOTIFICATION_LABELS.general;
+
+const serializeAuditNotification = (notification) => ({
+  id: notification.id,
+  auditPlanId: notification.auditPlanId,
+  title: notification.title,
+  notificationType: notification.notificationType,
+  badgeLabel: buildAuditNotificationLabel(notification.notificationType, notification.badgeLabel),
+  scheduledAt: notification.scheduledAt,
+  locationOrMode: notification.locationOrMode,
+  message: notification.message,
+  status: notification.status,
+  responseStatus: notification.responseStatus,
+  responseComment: notification.responseComment,
+  proposedScheduledAt: notification.proposedScheduledAt,
+  respondedAt: notification.respondedAt,
+  isActive: notification.isActive,
+  canConfirmAvailability: notification.isActive && notification.status === 'scheduled' && notification.responseStatus !== 'confirmed',
+  canRequestChange: notification.isActive && notification.status === 'scheduled',
+  createdBy: notification.creator
+    ? {
+        id: notification.creator.id,
+        name: notification.creator.name,
+        email: notification.creator.email || null,
+        role: notification.creator.role,
+        department: notification.creator.department || null
+      }
+    : null,
+  auditPlan: notification.auditPlan
+    ? {
+        id: notification.auditPlan.id,
+        planNumber: notification.auditPlan.planNumber,
+        title: notification.auditPlan.title,
+        department: notification.auditPlan.department || null
+      }
+    : null,
+  metadata: notification.metadata || {}
+});
+
 const serializeComment = (comment) => ({
   id: comment.id,
   body: comment.body,
@@ -131,20 +179,30 @@ const baseInclude = [
   }
 ];
 
+const auditNotificationInclude = [
+  { model: User, as: 'creator', attributes: ['id', 'name', 'email', 'role', 'department'] },
+  { model: AuditPlan, as: 'auditPlan', attributes: ['id', 'planNumber', 'title', 'department', 'teamLeadId', 'teamMemberIds'] }
+];
+
 router.get('/dashboard', ensureAuditee, async (req, res) => {
   try {
-    const requests = await DocumentRequest.findAll({
-      where: { assignedTo: req.user.id },
-      include: baseInclude,
-      order: [['requestedAt', 'DESC']]
-    });
-
-    const [unreadNotifications, governanceDocumentCount] = await Promise.all([
+    const [requests, unreadNotifications, governanceDocumentCount, auditNotifications] = await Promise.all([
+      DocumentRequest.findAll({
+        where: { assignedTo: req.user.id },
+        include: baseInclude,
+        order: [['requestedAt', 'DESC']]
+      }),
       Notification.count({ where: { userId: req.user.id, status: 'unread' } }),
-      GovernanceDocument.count({ where: { uploadedBy: req.user.id } })
+      GovernanceDocument.count({ where: { uploadedBy: req.user.id } }),
+      AuditNotification.findAll({
+        where: { auditeeUserId: req.user.id, isActive: true },
+        include: auditNotificationInclude,
+        order: [['scheduledAt', 'ASC'], ['createdAt', 'DESC']]
+      })
     ]);
 
     const normalized = requests.map(serializeRequest);
+    const serializedNotifications = auditNotifications.map(serializeAuditNotification);
 
     const summary = {
       pendingUpload: normalized.filter((item) => item.status === 'pending_upload').length,
@@ -152,14 +210,18 @@ router.get('/dashboard', ensureAuditee, async (req, res) => {
       approved: normalized.filter((item) => item.status === 'approved').length,
       overdue: normalized.filter((item) => item.status === 'overdue').length,
       unreadNotifications,
-      governanceDocumentCount
+      governanceDocumentCount,
+      pendingAuditNotifications: serializedNotifications.filter((item) => item.responseStatus === 'pending' && item.status === 'scheduled').length,
+      confirmedAuditNotifications: serializedNotifications.filter((item) => item.responseStatus === 'confirmed').length,
+      changeRequestedAuditNotifications: serializedNotifications.filter((item) => item.responseStatus === 'change_requested').length
     };
 
     return res.json({
       success: true,
       data: {
         summary,
-        documentRequests: normalized.slice(0, 10)
+        documentRequests: normalized.slice(0, 10),
+        auditNotifications: serializedNotifications.slice(0, 10)
       }
     });
   } catch (error) {
@@ -524,6 +586,194 @@ router.post('/document-requests/:id/upload', ensureAuditee, uploadAuditeeDocumen
       message: 'Error uploading document',
       error: error.message
     });
+  }
+});
+
+router.get('/audit-notifications', ensureAuditee, async (req, res) => {
+  try {
+    const { responseStatus, notificationType, upcomingOnly = 'false', limit = 50, search } = req.query;
+    const where = { auditeeUserId: req.user.id };
+    if (responseStatus) where.responseStatus = responseStatus;
+    if (notificationType) where.notificationType = notificationType;
+    if (upcomingOnly === 'true') {
+      where.status = 'scheduled';
+      where.scheduledAt = { [Op.gte]: new Date() };
+    }
+
+    const notifications = await AuditNotification.findAll({
+      where,
+      include: auditNotificationInclude,
+      order: [['scheduledAt', 'ASC'], ['createdAt', 'DESC']],
+      limit: Math.max(1, Math.min(100, Number(limit) || 50))
+    });
+
+    let serialized = notifications.map(serializeAuditNotification);
+    if (search) {
+      const q = String(search).toLowerCase();
+      serialized = serialized.filter((item) =>
+        (item.title || '').toLowerCase().includes(q) ||
+        (item.message || '').toLowerCase().includes(q) ||
+        (item.createdBy?.name || '').toLowerCase().includes(q) ||
+        (item.auditPlan?.title || '').toLowerCase().includes(q)
+      );
+    }
+
+    return res.json({
+      success: true,
+      count: serialized.length,
+      summary: {
+        pending: serialized.filter((item) => item.responseStatus === 'pending').length,
+        confirmed: serialized.filter((item) => item.responseStatus === 'confirmed').length,
+        changeRequested: serialized.filter((item) => item.responseStatus === 'change_requested').length
+      },
+      data: serialized
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Error fetching audit notifications', error: error.message });
+  }
+});
+
+router.get('/audit-notifications/:id', ensureAuditee, async (req, res) => {
+  try {
+    const notification = await AuditNotification.findOne({
+      where: { id: req.params.id, auditeeUserId: req.user.id },
+      include: auditNotificationInclude
+    });
+
+    if (!notification) {
+      return res.status(404).json({ success: false, message: 'Audit notification not found' });
+    }
+
+    return res.json({ success: true, data: serializeAuditNotification(notification) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Error fetching audit notification', error: error.message });
+  }
+});
+
+router.post('/audit-notifications/:id/confirm', ensureAuditee, async (req, res) => {
+  try {
+    const { comment } = req.body || {};
+    const notification = await AuditNotification.findOne({
+      where: { id: req.params.id, auditeeUserId: req.user.id },
+      include: auditNotificationInclude
+    });
+
+    if (!notification) {
+      return res.status(404).json({ success: false, message: 'Audit notification not found' });
+    }
+
+    if (!notification.isActive || notification.status !== 'scheduled') {
+      return res.status(400).json({ success: false, message: 'This audit notification is no longer active' });
+    }
+
+    await notification.update({
+      responseStatus: 'confirmed',
+      responseComment: comment ? String(comment).trim() : null,
+      proposedScheduledAt: null,
+      respondedAt: new Date()
+    });
+
+    const recipientIds = Array.from(new Set([
+      notification.createdBy,
+      notification.auditPlan?.teamLeadId,
+      ...(Array.isArray(notification.auditPlan?.teamMemberIds) ? notification.auditPlan.teamMemberIds : [])
+    ].filter(Boolean))).filter((id) => id !== req.user.id);
+
+    for (const recipientId of recipientIds) {
+      await Notification.create({
+        userId: recipientId,
+        auditPlanId: notification.auditPlanId || null,
+        auditNotificationId: notification.id,
+        type: 'assignment',
+        title: 'Availability confirmed',
+        message: req.user.name + ' confirmed availability for ' + notification.title + '.',
+        status: 'unread',
+        metadata: {
+          auditNotificationId: notification.id,
+          responseStatus: 'confirmed',
+          respondedBy: req.user.id,
+          respondedByName: req.user.name
+        }
+      });
+    }
+
+    await Notification.update({ status: 'read' }, {
+      where: { userId: req.user.id, auditNotificationId: notification.id }
+    });
+
+    const hydrated = await AuditNotification.findByPk(notification.id, { include: auditNotificationInclude });
+    return res.json({ success: true, message: 'Availability confirmed successfully', data: serializeAuditNotification(hydrated) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Error confirming availability', error: error.message });
+  }
+});
+
+router.post('/audit-notifications/:id/request-change', ensureAuditee, async (req, res) => {
+  try {
+    const { comment, proposedScheduledAt } = req.body || {};
+    if (!comment || String(comment).trim().length < 3) {
+      return res.status(400).json({ success: false, message: 'Please provide a reason for the change request' });
+    }
+
+    const proposedDate = proposedScheduledAt ? new Date(proposedScheduledAt) : null;
+    if (proposedScheduledAt && Number.isNaN(proposedDate.getTime())) {
+      return res.status(400).json({ success: false, message: 'proposedScheduledAt must be a valid date when supplied' });
+    }
+
+    const notification = await AuditNotification.findOne({
+      where: { id: req.params.id, auditeeUserId: req.user.id },
+      include: auditNotificationInclude
+    });
+
+    if (!notification) {
+      return res.status(404).json({ success: false, message: 'Audit notification not found' });
+    }
+
+    if (!notification.isActive || notification.status !== 'scheduled') {
+      return res.status(400).json({ success: false, message: 'This audit notification is no longer active' });
+    }
+
+    await notification.update({
+      responseStatus: 'change_requested',
+      responseComment: String(comment).trim(),
+      proposedScheduledAt: proposedDate,
+      respondedAt: new Date()
+    });
+
+    const recipientIds = Array.from(new Set([
+      notification.createdBy,
+      notification.auditPlan?.teamLeadId,
+      ...(Array.isArray(notification.auditPlan?.teamMemberIds) ? notification.auditPlan.teamMemberIds : [])
+    ].filter(Boolean))).filter((id) => id !== req.user.id);
+
+    for (const recipientId of recipientIds) {
+      await Notification.create({
+        userId: recipientId,
+        auditPlanId: notification.auditPlanId || null,
+        auditNotificationId: notification.id,
+        type: 'assignment',
+        title: 'Meeting change requested',
+        message: req.user.name + ' requested a schedule change for ' + notification.title + '.',
+        status: 'unread',
+        metadata: {
+          auditNotificationId: notification.id,
+          responseStatus: 'change_requested',
+          respondedBy: req.user.id,
+          respondedByName: req.user.name,
+          proposedScheduledAt: proposedDate,
+          responseComment: String(comment).trim()
+        }
+      });
+    }
+
+    await Notification.update({ status: 'read' }, {
+      where: { userId: req.user.id, auditNotificationId: notification.id }
+    });
+
+    const hydrated = await AuditNotification.findByPk(notification.id, { include: auditNotificationInclude });
+    return res.json({ success: true, message: 'Change request submitted successfully', data: serializeAuditNotification(hydrated) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Error requesting schedule change', error: error.message });
   }
 });
 

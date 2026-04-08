@@ -43,8 +43,9 @@ const request = async (method, route, options = {}) => {
   const headers = { ...(options.headers || {}) };
   if (options.token) headers.authorization = `Bearer ${options.token}`;
   let body = options.body;
+  const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
 
-  if (body !== undefined && body !== null && !(body instanceof Buffer) && typeof body !== 'string' && !headers['Content-Type']) {
+  if (body !== undefined && body !== null && !(body instanceof Buffer) && typeof body !== 'string' && !isFormData && !headers['Content-Type']) {
     headers['Content-Type'] = 'application/json';
     body = JSON.stringify(body);
   }
@@ -340,12 +341,14 @@ const main = async () => {
   let adminToken;
   let qaUser;
   let unitHeadUser;
+  let bacUser;
   let teamLeadUser;
   let teamMemberUser;
   let auditeeUser;
   let caeToken;
   let qaToken;
   let unitHeadToken;
+  let bacToken;
   let teamLeadToken;
   let teamMemberToken;
   let auditeeToken;
@@ -356,6 +359,11 @@ const main = async () => {
   let tempAssignUserId;
   let tempDeactivateUserId;
   let documentRequestId;
+  let auditNotificationId;
+  let changeRequestAuditNotificationId;
+  let annualAuditPlanId;
+  let teamLeadPlanningProcedureId;
+  let teamMemberProcedureId;
 
   await runCheck('GET /', async () => {
     const response = await request('GET', '/');
@@ -416,6 +424,11 @@ const main = async () => {
   await runCheck('POST /api/auth/admin/create-user unit_head', async () => {
     unitHeadUser = await createOtpUserViaAdmin({ adminToken, name: 'Endpoint Unit Head', email: `endpoint-unit-${runStamp}@example.com`, role: 'unit_head', departmentName: department, employeeId: `EP-UH-${runStamp}` });
     return unitHeadUser.email;
+  });
+
+  await runCheck('POST /api/auth/admin/create-user bac_secretariat', async () => {
+    bacUser = await createOtpUserViaAdmin({ adminToken, name: 'Endpoint BAC', email: `endpoint-bac-${runStamp}@example.com`, role: 'bac_secretariat', departmentName: department, employeeId: `EP-BA-${runStamp}` });
+    return bacUser.email;
   });
 
   await runCheck('POST /api/auth/admin/create-user team_lead', async () => {
@@ -510,6 +523,12 @@ const main = async () => {
     return result.requestStatus === 200 ? 'unit head OTP verified' : 'unit head OTP verified after email provider error';
   });
 
+  await runCheck('POST /api/auth/email/verify-login BAC', async () => {
+    const result = await otpLogin(bacUser.email);
+    bacToken = result.token;
+    return result.requestStatus === 200 ? 'bac OTP verified' : 'bac OTP verified after email provider error';
+  });
+
   await runCheck('POST /api/auth/email/verify-login Team Lead', async () => {
     const result = await otpLogin(teamLeadUser.email);
     teamLeadToken = result.token;
@@ -548,8 +567,102 @@ const main = async () => {
     expectStatus(response, [200], 'POST /api/auth/login after reset');
     return response.body?.message;
   });
-
   seeded = await seedDomainData({ qaUser, unitHeadUser, teamLeadUser, teamMemberUser });
+
+  await runCheck('POST /api/audit/audit-notifications', async () => {
+    const response = await request('POST', '/api/audit/audit-notifications', {
+      token: teamMemberToken,
+      body: {
+        auditeeUserId: auditeeUser.id,
+        auditPlanId: seeded.approvedPlanTwo.id,
+        title: 'Endpoint Audit Notification ' + runStamp,
+        notificationType: 'opening_meeting',
+        badgeLabel: 'Opening Meeting',
+        scheduledAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+        locationOrMode: 'Teams Meeting',
+        message: 'Please confirm your availability for the opening meeting.'
+      }
+    });
+    expectStatus(response, [201], 'POST /api/audit/audit-notifications');
+    auditNotificationId = response.body?.data?.id;
+    return response.body?.data?.badgeLabel || 'audit notification created';
+  });
+
+  await runCheck('GET /api/audit/audit-notifications', async () => {
+    const response = await request('GET', '/api/audit/audit-notifications', { token: teamMemberToken });
+    expectStatus(response, [200], 'GET /api/audit/audit-notifications');
+    const found = Array.isArray(response.body?.data) && response.body.data.some((item) => item.id === auditNotificationId);
+    if (!found) throw new Error('Created audit notification not returned in audit list');
+    return 'count=' + response.body?.count;
+  });
+
+  await runCheck('GET /api/auditee/dashboard pending meeting response', async () => {
+    const response = await request('GET', '/api/auditee/dashboard', { token: auditeeToken });
+    expectStatus(response, [200], 'GET /api/auditee/dashboard pending meeting response');
+    if ((response.body?.data?.summary?.pendingAuditNotifications || 0) < 1) {
+      throw new Error('Expected at least one pending audit notification on auditee dashboard');
+    }
+    return 'pending=' + response.body?.data?.summary?.pendingAuditNotifications;
+  });
+
+  await runCheck('GET /api/auditee/audit-notifications', async () => {
+    const response = await request('GET', '/api/auditee/audit-notifications', { token: auditeeToken });
+    expectStatus(response, [200], 'GET /api/auditee/audit-notifications');
+    const found = Array.isArray(response.body?.data) && response.body.data.some((item) => item.id === auditNotificationId);
+    if (!found) throw new Error('Created audit notification not returned in auditee list');
+    return 'count=' + response.body?.count;
+  });
+
+  await runCheck('POST /api/auditee/audit-notifications/:id/confirm', async () => {
+    const response = await request('POST', '/api/auditee/audit-notifications/' + auditNotificationId + '/confirm', {
+      token: auditeeToken,
+      body: { comment: 'I am available for the opening meeting.' }
+    });
+    expectStatus(response, [200], 'POST /api/auditee/audit-notifications/:id/confirm');
+    return response.body?.data?.responseStatus;
+  });
+
+  await runCheck('POST /api/audit/audit-notifications second', async () => {
+    const response = await request('POST', '/api/audit/audit-notifications', {
+      token: teamMemberToken,
+      body: {
+        auditeeUserId: auditeeUser.id,
+        auditPlanId: seeded.approvedPlanTwo.id,
+        title: 'Endpoint Change Request Notification ' + runStamp,
+        notificationType: 'opening_meeting',
+        badgeLabel: 'Opening Meeting',
+        scheduledAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString(),
+        locationOrMode: 'Board Room',
+        message: 'Please review and respond.'
+      }
+    });
+    expectStatus(response, [201], 'POST /api/audit/audit-notifications second');
+    changeRequestAuditNotificationId = response.body?.data?.id;
+    return changeRequestAuditNotificationId;
+  });
+
+  await runCheck('POST /api/auditee/audit-notifications/:id/request-change', async () => {
+    const response = await request('POST', '/api/auditee/audit-notifications/' + changeRequestAuditNotificationId + '/request-change', {
+      token: auditeeToken,
+      body: {
+        comment: 'Please move this to the afternoon due to an existing management meeting.',
+        proposedScheduledAt: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000 + 3 * 60 * 60 * 1000).toISOString()
+      }
+    });
+    expectStatus(response, [200], 'POST /api/auditee/audit-notifications/:id/request-change');
+    return response.body?.data?.responseStatus;
+  });
+
+  await runCheck('GET /api/audit/audit-notifications confirmed/change requested', async () => {
+    const response = await request('GET', '/api/audit/audit-notifications', { token: teamMemberToken });
+    expectStatus(response, [200], 'GET /api/audit/audit-notifications confirmed/change requested');
+    const confirmed = response.body?.summary?.confirmed || 0;
+    const changeRequested = response.body?.summary?.changeRequested || 0;
+    if (confirmed < 1 || changeRequested < 1) {
+      throw new Error('Expected confirmed and change requested audit notifications after auditee actions');
+    }
+    return 'confirmed=' + confirmed + ', changeRequested=' + changeRequested;
+  });
 
   await runCheck('POST /api/audit/document-requests', async () => {
     const response = await request('POST', '/api/audit/document-requests', {
@@ -560,7 +673,7 @@ const main = async () => {
         category: 'governance',
         priority: 'high',
         assignedTo: auditeeUser.id,
-        auditPlanId: seeded.approvedPlanOne.id,
+        auditPlanId: seeded.approvedPlanTwo.id,
         department,
         dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
       }
@@ -622,210 +735,177 @@ const main = async () => {
     return `unread=${response.body?.unread}`;
   });
 
-  markSkip('POST /api/auditee/document-requests/:id/upload', 'Requires multipart upload and valid Cloudinary document storage configuration');
+  await runCheck('POST /api/auditee/document-requests/:id/upload', async () => {
+    const form = new FormData();
+    form.append('title', 'Endpoint Uploaded Governance Document');
+    form.append('description', 'Uploaded during endpoint smoke testing');
+    form.append('documentFile', new Blob(['%PDF-1.4\n% endpoint smoke upload\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF'], { type: 'application/pdf' }), 'endpoint-upload.pdf');
 
-  await runCheck('POST /api/audit/document-requests/:id/review', async () => {
-    await DocumentRequest.update({
-      status: 'uploaded',
-      submittedAt: new Date(),
-      fileName: 'endpoint-seeded.txt',
-      originalFileName: 'endpoint-seeded.txt',
-      fileUrl: 'https://example.com/endpoint-seeded.txt',
-      fileSize: 32,
-      mimeType: 'text/plain'
-    }, { where: { id: documentRequestId } });
-
-    const response = await request('POST', `/api/audit/document-requests/${documentRequestId}/review`, {
-      token: teamLeadToken,
-      body: { decision: 'approved', comments: 'Reviewed and accepted during smoke test' }
+    const response = await request('POST', '/api/auditee/document-requests/' + documentRequestId + '/upload', {
+      token: auditeeToken,
+      body: form
     });
-    expectStatus(response, [200], 'POST /api/audit/document-requests/:id/review');
-    return response.body?.message;
-  });
 
-  await runCheck('GET /api/auditee/dashboard approved', async () => {
-    const response = await request('GET', '/api/auditee/dashboard', { token: auditeeToken });
-    expectStatus(response, [200], 'GET /api/auditee/dashboard approved');
-    if ((response.body?.data?.summary?.approved || 0) < 1) {
-      throw new Error('Expected approved document request on auditee dashboard after review');
+    expectStatus(response, [200], 'POST /api/auditee/document-requests/:id/upload');
+    if (!response.body?.data?.governanceDocument?.fileUrl) {
+      throw new Error('Expected uploaded governance document file URL from upload response');
     }
-    return `approved=${response.body?.data?.summary?.approved}`;
+    return response.body?.data?.governanceDocument?.originalFileName || 'uploaded';
   });
 
-  await runCheck('GET /api/qa/download-risk-template', async () => {
-    const response = await request('GET', '/api/qa/download-risk-template', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/download-risk-template');
-    return `${response.body?.byteLength || 0} bytes`;
+  await runCheck('GET /api/team-lead/dashboard', async () => {
+    const response = await request('GET', '/api/team-lead/dashboard', { token: teamLeadToken });
+    expectStatus(response, [200], 'GET /api/team-lead/dashboard');
+    if ((response.body?.data?.summary?.teamMembers || 0) < 1) {
+      throw new Error('Expected at least one active team member on the team lead dashboard');
+    }
+    if (response.body?.data?.statusOverview?.completed === undefined) {
+      throw new Error('Expected completed audit count on the team lead dashboard');
+    }
+    return 'upcoming=' + response.body?.data?.summary?.upcomingAudits + ', completed=' + response.body?.data?.statusOverview?.completed;
   });
 
-  markSkip('POST /api/qa/upload-risk-excel', 'Requires multipart upload and Cloudinary-backed storage');
-  markSkip('POST /api/qa/upload-risk-data', 'Requires multipart upload and Cloudinary-backed storage');
-
-  await runCheck('GET /api/qa/risk-assessments', async () => {
-    const response = await request('GET', '/api/qa/risk-assessments', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/risk-assessments');
-    return `count=${response.body?.count}`;
+  await runCheck('GET /api/team-lead/approved-plans', async () => {
+    const response = await request('GET', '/api/team-lead/approved-plans', { token: teamLeadToken });
+    expectStatus(response, [200], 'GET /api/team-lead/approved-plans');
+    const found = Array.isArray(response.body?.data) && response.body.data.find((item) => item.id === seeded.approvedPlanTwo.id);
+    if (!found) throw new Error('Expected assigned approved plan in team lead approved plan list');
+    return 'count=' + response.body?.count;
   });
 
-  await runCheck('PUT /api/qa/risk-assessments/:id/status', async () => {
-    const response = await request('PUT', `/api/qa/risk-assessments/${seeded.riskAssessment.id}/status`, { token: qaToken, body: { status: 'in_progress' } });
-    expectStatus(response, [200], 'PUT /api/qa/risk-assessments/:id/status');
-    return response.body?.message;
-  });
-
-  await runCheck('DELETE /api/qa/risk-assessments/:id', async () => {
-    const response = await request('DELETE', `/api/qa/risk-assessments/${seeded.deleteCandidate.id}`, { token: qaToken });
-    expectStatus(response, [200], 'DELETE /api/qa/risk-assessments/:id');
-    return response.body?.message;
-  });
-
-  await runCheck('GET /api/qa/dashboard', async () => {
-    const response = await request('GET', '/api/qa/dashboard', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/dashboard');
-    return 'dashboard ok';
-  });
-
-  await runCheck('GET /api/qa/dashboard-data', async () => {
-    const response = await request('GET', '/api/qa/dashboard-data', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/dashboard-data');
-    return 'dashboard-data ok';
-  });
-
-  await runCheck('GET /api/qa/audit-plans', async () => {
-    const response = await request('GET', '/api/qa/audit-plans', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/audit-plans');
-    return `count=${response.body?.summary?.total}`;
-  });
-
-  await runCheck('PUT /api/qa/audit-plans/:id/score', async () => {
-    const response = await request('PUT', `/api/qa/audit-plans/${seeded.approvedPlanOne.id}/score`, { token: qaToken, body: { operationalRiskScore: 81, riskRating: 'High' } });
-    expectStatus(response, [200], 'PUT /api/qa/audit-plans/:id/score');
-    return response.body?.message;
-  });
-
-  await runCheck('GET /api/qa/audit-plans/export-excel', async () => {
-    const response = await request('GET', '/api/qa/audit-plans/export-excel', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/audit-plans/export-excel');
-    return `${response.body?.byteLength || 0} bytes`;
-  });
-
-  await runCheck('GET /api/qa/audit-plans/export-pdf', async () => {
-    const response = await request('GET', '/api/qa/audit-plans/export-pdf', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/audit-plans/export-pdf');
-    return `${response.body?.byteLength || 0} bytes`;
-  }, { optional: true });
-
-  await runCheck('GET /api/qa/auto-schedule/recommendations', async () => {
-    const response = await request('GET', `/api/qa/auto-schedule/recommendations?department=${encodeURIComponent(department)}`, { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/auto-schedule/recommendations');
-    return `recommendations=${response.body?.data?.recommendations?.length || 0}`;
-  });
-  await runCheck('GET /api/qa/auto-schedule/submissions', async () => {
-    const response = await request('GET', '/api/qa/auto-schedule/submissions', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/auto-schedule/submissions');
-    return `count=${response.body?.count}`;
-  });
-
-  await runCheck('POST /api/qa/auto-schedule/submit-to-cae (approve path)', async () => {
-    const response = await request('POST', '/api/qa/auto-schedule/submit-to-cae', {
-      token: qaToken,
-      body: { sourcePlanIds: [seeded.approvedPlanTwo.id], targetYear: new Date().getFullYear() + 1, notes: 'Endpoint smoke submission approval path', department }
-    });
-    expectStatus(response, [201], 'POST /api/qa/auto-schedule/submit-to-cae first');
-    firstSubmissionId = response.body?.data?.submissionId;
-    return firstSubmissionId;
-  });
-
-  await runCheck('POST /api/qa/submit-to-cae', async () => {
-    const response = await request('POST', '/api/qa/submit-to-cae', { token: qaToken, body: { planIds: [seeded.approvedPlanOne.id], notes: 'Endpoint smoke submit to CAE', department } });
-    expectStatus(response, [200], 'POST /api/qa/submit-to-cae');
-    return response.body?.message;
-  });
-
-  await runCheck('POST /api/qa/consolidate-plans', async () => {
-    const response = await request('POST', '/api/qa/consolidate-plans', { token: qaToken, body: { planIds: [seeded.approvedPlanOne.id, seeded.approvedPlanTwo.id], consolidatedTitle: `Endpoint Consolidated ${runStamp}`, description: 'Seeded consolidation test' } });
-    expectStatus(response, [201], 'POST /api/qa/consolidate-plans');
-    return response.body?.message;
-  });
-
-  await runCheck('GET /api/qa/download-template', async () => {
-    const response = await request('GET', '/api/qa/download-template', { token: qaToken });
-    expectStatus(response, [200], 'GET /api/qa/download-template');
-    return `${response.body?.byteLength || 0} bytes via redirect`;
-  });
-
-  await runCheck('POST /api/unit-head/apm', async () => {
-    const response = await request('POST', '/api/unit-head/apm', {
-      token: unitHeadToken,
-      body: {
-        title: `Endpoint APM ${runStamp}`,
-        description: 'Seeded through endpoint test',
-        department,
-        planNumber: `APM-EP-${runStamp}`,
-        auditPeriod: 'Q1 2026',
-        budget: 3100,
-        resourceHours: 48,
-        auditAreas: ['Planning'],
-        riskAssessmentId: seeded.riskAssessment.id,
-        objectives: ['Objective 1'],
-        scope: 'Endpoint scope',
-        deliverables: ['Deliverable 1'],
-        notes: 'Initial APM creation'
-      }
-    });
-    expectStatus(response, [201], 'POST /api/unit-head/apm');
-    createdApmId = response.body?.data?.id;
-    return createdApmId;
-  });
-
-  await runCheck('GET /api/unit-head/apm', async () => {
-    const response = await request('GET', '/api/unit-head/apm', { token: unitHeadToken });
-    expectStatus(response, [200], 'GET /api/unit-head/apm');
-    return `total=${response.body?.summary?.total}`;
-  });
-
-  await runCheck('GET /api/unit-head/apm/:id', async () => {
-    const response = await request('GET', `/api/unit-head/apm/${createdApmId}`, { token: unitHeadToken });
-    expectStatus(response, [200], 'GET /api/unit-head/apm/:id');
+  await runCheck('GET /api/team-lead/approved-plans/:id', async () => {
+    const response = await request('GET', '/api/team-lead/approved-plans/' + seeded.approvedPlanTwo.id, { token: teamLeadToken });
+    expectStatus(response, [200], 'GET /api/team-lead/approved-plans/:id');
+    if ((response.body?.data?.teamMembers?.length || 0) < 1) {
+      throw new Error('Expected team members on approved plan detail');
+    }
     return response.body?.data?.title;
   });
 
-  await runCheck('PUT /api/unit-head/apm/:id', async () => {
-    const response = await request('PUT', `/api/unit-head/apm/${createdApmId}`, { token: unitHeadToken, body: { notes: 'Updated APM notes', budget: 4200, teamLeadId: teamLeadUser.id, teamMemberIds: [teamMemberUser.id] } });
-    expectStatus(response, [200], 'PUT /api/unit-head/apm/:id');
+  await runCheck('GET /api/team-lead/assignments', async () => {
+    const response = await request('GET', '/api/team-lead/assignments', { token: teamLeadToken });
+    expectStatus(response, [200], 'GET /api/team-lead/assignments');
+    const found = Array.isArray(response.body?.data) && response.body.data.find((item) => item.id === seeded.approvedPlanTwo.id);
+    if (!found) throw new Error('Expected assigned audit in team lead assignments list');
+    if (found.durationOfAudit === null || found.durationOfAudit === undefined) {
+      throw new Error('Expected durationOfAudit for team lead assignment row');
+    }
+    return 'count=' + response.body?.count;
+  });
+
+  await runCheck('POST /api/team-lead/assignments/:id/commence', async () => {
+    const response = await request('POST', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/commence', { token: teamLeadToken, body: {} });
+    expectStatus(response, [200], 'POST /api/team-lead/assignments/:id/commence');
+    if (response.body?.data?.executionStatus !== 'ongoing') {
+      throw new Error('Expected commenced assignment to move to ongoing status');
+    }
     return response.body?.message;
   });
 
-  await runCheck('POST /api/unit-head/apm/:id/submit', async () => {
-    const response = await request('POST', `/api/unit-head/apm/${createdApmId}/submit`, { token: unitHeadToken, body: { notes: 'Submit for approval' } });
-    expectStatus(response, [200], 'POST /api/unit-head/apm/:id/submit');
-    return response.body?.message;
+  await runCheck('GET /api/team-lead/assignments/:id/workspace', async () => {
+    const response = await request('GET', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/workspace', { token: teamLeadToken });
+    expectStatus(response, [200], 'GET /api/team-lead/assignments/:id/workspace');
+    if (!response.body?.data?.workspace?.basicInformation?.auditTitle) {
+      throw new Error('Expected workspace basic information after commence');
+    }
+    return response.body?.data?.workspace?.planningStatus;
   });
 
-  await runCheck('POST /api/unit-head/apm/:id/reject', async () => {
-    const response = await request('POST', `/api/unit-head/apm/${createdApmId}/reject`, { token: unitHeadToken, body: { reason: 'Needs revision', notes: 'Returning to draft for endpoint test' } });
-    expectStatus(response, [200], 'POST /api/unit-head/apm/:id/reject');
-    return response.body?.message;
+  await runCheck('PUT /api/team-lead/assignments/:id/workspace', async () => {
+    const response = await request('PUT', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/workspace', {
+      token: teamLeadToken,
+      body: {
+        basicInformation: {
+          auditTitle: 'FY25 Q2 Audit - Procurement',
+          auditClassification: 'Compliance',
+          durationDays: 40
+        },
+        unitBackgroundDescription: 'Procurement unit background for smoke test coverage.',
+        objectives: [{ text: 'Assess procurement governance and controls' }],
+        scopeOfReview: 'Procurement policies, approval workflows, vendor onboarding, and purchase-to-pay controls.',
+        raca: {
+          riskAnalysis: 'Key procurement risks include override of approval limits and weak vendor due diligence.',
+          controlAnalysis: 'Existing controls include approval thresholds, vendor checks, and periodic reconciliations.'
+        },
+        auditApproach: 'Risk-based walkthroughs, control design review, and sample testing.',
+        auditProcess: 'Week 1 planning, Week 2 fieldwork, Week 3 testing, Week 4 reporting.'
+      }
+    });
+    expectStatus(response, [200], 'PUT /api/team-lead/assignments/:id/workspace');
+    if (response.body?.data?.workspace?.basicInformation?.durationDays !== 40) {
+      throw new Error('Expected updated durationDays in team lead workspace');
+    }
+    return response.body?.data?.workspace?.basicInformation?.auditClassification;
   });
 
-  await runCheck('POST /api/unit-head/apm/:id/approve', async () => {
-    const response = await request('POST', `/api/unit-head/apm/${createdApmId}/approve`, { token: unitHeadToken, body: { notes: 'Approving after revision' } });
-    expectStatus(response, [200], 'POST /api/unit-head/apm/:id/approve');
-    return response.body?.message;
+  await runCheck('POST /api/team-lead/assignments/:id/workspace/objectives', async () => {
+    const response = await request('POST', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/workspace/objectives', {
+      token: teamLeadToken,
+      body: { text: 'Validate compliance with procurement policy and delegated authority' }
+    });
+    expectStatus(response, [201], 'POST /api/team-lead/assignments/:id/workspace/objectives');
+    return response.body?.data?.objective?.id;
   });
 
-  await runCheck('GET /api/unit-head/approved-plan-data', async () => {
-    const response = await request('GET', '/api/unit-head/approved-plan-data', { token: unitHeadToken });
-    expectStatus(response, [200], 'GET /api/unit-head/approved-plan-data');
-    return 'approved plan data ok';
+  await runCheck('POST /api/team-lead/assignments/:id/workspace/methodology-document', async () => {
+    const form = new FormData();
+    form.append('documentFile', new Blob(['%PDF-1.4\n% team lead methodology smoke upload\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF'], { type: 'application/pdf' }), 'team-lead-methodology.pdf');
+    const response = await request('POST', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/workspace/methodology-document', {
+      token: teamLeadToken,
+      body: form
+    });
+    expectStatus(response, [200], 'POST /api/team-lead/assignments/:id/workspace/methodology-document');
+    if (!response.body?.data?.methodologyDocument?.fileUrl) {
+      throw new Error('Expected uploaded methodology document file URL');
+    }
+    return response.body?.data?.methodologyDocument?.originalFileName || 'methodology-uploaded';
   });
 
-  await runCheck('POST /api/unit-head/approved-plan/:id/assign', async () => {
-    const response = await request('POST', `/api/unit-head/approved-plan/${seeded.approvedPlanOne.id}/assign`, { token: unitHeadToken, body: { teamLeadId: teamLeadUser.id, teamMemberIds: [teamMemberUser.id], notes: 'Assigned during smoke test', executionStatus: 'ongoing', progressPercentage: 45 } });
-    expectStatus(response, [200], 'POST /api/unit-head/approved-plan/:id/assign');
-    return response.body?.message;
+  await runCheck('POST /api/team-lead/assignments/:id/workspace/procedures', async () => {
+    const response = await request('POST', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/workspace/procedures', {
+      token: teamLeadToken,
+      body: {
+        testObjective: 'Verify purchase approvals follow delegated authority matrix',
+        testProcedure: 'Select a sample of procurements and trace approvals to the authority matrix.',
+        area: 'Procurement Approval Controls'
+      }
+    });
+    expectStatus(response, [201], 'POST /api/team-lead/assignments/:id/workspace/procedures');
+    teamLeadPlanningProcedureId = response.body?.data?.procedure?.id;
+    return response.body?.data?.procedure?.id;
   });
 
+  await runCheck('PUT /api/team-lead/assignments/:id/workspace/procedures/:procedureId', async () => {
+    const response = await request('PUT', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/workspace/procedures/' + teamLeadPlanningProcedureId, {
+      token: teamLeadToken,
+      body: {
+        testProcedure: 'Select procurements, inspect approval evidence, and confirm approver authority against the matrix.'
+      }
+    });
+    expectStatus(response, [200], 'PUT /api/team-lead/assignments/:id/workspace/procedures/:procedureId');
+    return response.body?.data?.procedure?.id;
+  });
+
+  await runCheck('POST /api/team-lead/assignments/:id/workspace/save-draft', async () => {
+    const response = await request('POST', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/workspace/save-draft', { token: teamLeadToken, body: {} });
+    expectStatus(response, [200], 'POST /api/team-lead/assignments/:id/workspace/save-draft');
+    if (response.body?.data?.workspace?.planningStatus !== 'draft') {
+      throw new Error('Expected workspace to remain in draft after save');
+    }
+    return response.body?.data?.workspace?.summary?.procedureCount;
+  });
+
+  await runCheck('POST /api/team-lead/assignments/:id/workspace/submit', async () => {
+    const response = await request('POST', '/api/team-lead/assignments/' + seeded.approvedPlanTwo.id + '/workspace/submit', {
+      token: teamLeadToken,
+      body: { targetRole: 'quality_assurance', notes: 'Submitting team lead planning workspace during smoke test.' }
+    });
+    expectStatus(response, [200], 'POST /api/team-lead/assignments/:id/workspace/submit');
+    if (response.body?.data?.workspace?.planningStatus !== 'submitted_for_approval') {
+      throw new Error('Expected planning workspace to move to submitted_for_approval');
+    }
+    return response.body?.data?.workspace?.approval?.status;
+  });
   await runCheck('GET /api/audit/dashboard', async () => {
     const response = await request('GET', '/api/audit/dashboard', { token: teamMemberToken });
     expectStatus(response, [200], 'GET /api/audit/dashboard');
@@ -844,7 +924,7 @@ const main = async () => {
   await runCheck('GET /api/audit/my-assignments', async () => {
     const response = await request('GET', '/api/audit/my-assignments', { token: teamMemberToken });
     expectStatus(response, [200], 'GET /api/audit/my-assignments');
-    const found = Array.isArray(response.body?.data) && response.body.data.find((item) => item.auditPlanId === seeded.approvedPlanOne.id);
+    const found = Array.isArray(response.body?.data) && response.body.data.find((item) => item.auditPlanId === seeded.approvedPlanTwo.id);
     if (!found) throw new Error('Expected assigned approved plan in team member assignment list');
     teamMemberAssignmentId = found.id;
     return 'count=' + response.body?.count;
@@ -859,14 +939,15 @@ const main = async () => {
   await runCheck('GET /api/audit/my-assignments/:id/procedures', async () => {
     const response = await request('GET', '/api/audit/my-assignments/' + teamMemberAssignmentId + '/procedures', { token: teamMemberToken });
     expectStatus(response, [200], 'GET /api/audit/my-assignments/:id/procedures');
-    if ((response.body?.count || 0) < 2) {
-      throw new Error('Expected seeded audit procedures from audit areas');
+    if ((response.body?.count || 0) < 1) {
+      throw new Error('Expected at least one audit procedure after team lead planning sync');
     }
+    teamMemberProcedureId = response.body?.data?.[0]?.id;
     return 'count=' + response.body?.count;
   });
 
   await runCheck('PUT /api/audit/my-assignments/:id/procedures/:procedureId', async () => {
-    const response = await request('PUT', '/api/audit/my-assignments/' + teamMemberAssignmentId + '/procedures/procedure-1', {
+    const response = await request('PUT', '/api/audit/my-assignments/' + teamMemberAssignmentId + '/procedures/' + teamMemberProcedureId, {
       token: teamMemberToken,
       body: { status: 'in_progress', workingNotes: 'Reviewed initial control documentation', completionPercentage: 55 }
     });
@@ -1009,6 +1090,7 @@ main()
     await stopServer().catch(() => {});
     await sequelize.close().catch(() => {});
   });
+
 
 
 

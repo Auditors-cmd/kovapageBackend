@@ -350,6 +350,22 @@ User.associate = (models) => {
     });
   }
 
+  if (models.AuditNotification) {
+    User.hasMany(models.AuditNotification, {
+      foreignKey: 'auditeeUserId',
+      as: 'auditNotifications',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+
+    User.hasMany(models.AuditNotification, {
+      foreignKey: 'createdBy',
+      as: 'createdAuditNotifications',
+      onDelete: 'CASCADE',
+      onUpdate: 'CASCADE'
+    });
+  }
+
   if (models.DocumentComment) {
     User.hasMany(models.DocumentComment, {
       foreignKey: 'authorId',

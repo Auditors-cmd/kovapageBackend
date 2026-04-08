@@ -256,6 +256,15 @@ AuditPlan.associate = (models) => {
     });
   }
 
+  if (models.AuditNotification) {
+    AuditPlan.hasMany(models.AuditNotification, {
+      foreignKey: 'auditPlanId',
+      as: 'auditNotifications',
+      onDelete: 'SET NULL',
+      onUpdate: 'CASCADE'
+    });
+  }
+
   if (models.DocumentComment) {
     AuditPlan.hasMany(models.DocumentComment, {
       foreignKey: 'auditPlanId',

@@ -7,6 +7,8 @@ const unitHeadRoutes = require('./routes/unitHead');
 const caeRoutes = require('./routes/cae');
 const auditRoutes = require('./routes/audit');
 const auditeeRoutes = require('./routes/auditee');
+const teamLeadRoutes = require('./routes/teamLead');
+const annualAuditPlanRoutes = require('./routes/annualAuditPlan');
 const fs = require('fs');
 const path = require('path');
 const dotenv = require('dotenv');
@@ -40,6 +42,7 @@ const AuditPlanTeamMember = require('./models/AuditPlanTeamMember');
 const DashboardShare = require('./models/DashboardShare');
 const AuditAssignmentTask = require('./models/AuditAssignmentTask');
 const Notification = require('./models/Notification');
+const AuditNotification = require('./models/AuditNotification');
 const AutoScheduleSubmission = require('./models/AutoScheduleSubmission');
 const DocumentRequest = require('./models/DocumentRequest');
 const GovernanceDocument = require('./models/GovernanceDocument');
@@ -62,6 +65,7 @@ const setupAssociations = () => {
     DashboardShare,
     AuditAssignmentTask,
     Notification,
+    AuditNotification,
     AutoScheduleSubmission,
     DocumentRequest,
     GovernanceDocument,
@@ -79,6 +83,7 @@ const setupAssociations = () => {
     DashboardShare,
     AuditAssignmentTask,
     Notification,
+    AuditNotification,
     AutoScheduleSubmission,
     DocumentRequest,
     GovernanceDocument,
@@ -193,6 +198,8 @@ app.use('/api/unit-head', unitHeadRoutes);
 app.use('/api/cae', caeRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/auditee', auditeeRoutes);
+app.use('/api/team-lead', teamLeadRoutes);
+app.use('/api/annual-audit-plans', annualAuditPlanRoutes);
 app.use('/api/auth', authRoutes);
 
 // SWAGGER DOCUMENTATION
@@ -267,7 +274,16 @@ app.get('/', (req, res) => {
       'POST /api/audit/document-requests',
       'GET  /api/audit/governance-documents',
       'GET  /api/auditee/document-requests',
-      'GET  /api/auditee/governance-documents'
+      'GET  /api/auditee/governance-documents',
+      'GET  /api/team-lead/dashboard',
+      'GET  /api/team-lead/approved-plans',
+      'GET  /api/team-lead/assignments',
+      'POST /api/team-lead/assignments/:id/commence',
+      'GET  /api/team-lead/assignments/:id/workspace',
+      'POST /api/team-lead/assignments/:id/workspace/submit',
+      'GET  /api/annual-audit-plans',
+      'POST /api/annual-audit-plans',
+      'POST /api/annual-audit-plans/generate-from-risk'
     ],
     timestamp: new Date().toISOString()
   });
@@ -352,7 +368,7 @@ const startServer = async () => {
     console.log(`Docs: http://localhost:${PORT}/api-docs`);
     console.log('Database: PostgreSQL');
     console.log('CORS: Enabled for all origins');
-    console.log('Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification, AutoScheduleSubmission, DocumentRequest, GovernanceDocument, DocumentComment');
+    console.log('Models loaded: User, OTP, RiskAssessment, AuditPlan, MonitoringDashboard, AuditPlanTeamMember, DashboardShare, AuditAssignmentTask, Notification, AuditNotification, AutoScheduleSubmission, DocumentRequest, GovernanceDocument, DocumentComment, AnnualAuditPlan');
     console.log('========================================');
   });
 };
@@ -361,3 +377,4 @@ startServer().catch((error) => {
   console.error('Failed to start server:', error);
   process.exit(1);
 });
+

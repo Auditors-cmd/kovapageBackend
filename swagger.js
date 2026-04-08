@@ -3614,6 +3614,8 @@ const ensureSwaggerTag = (name, description) => {
 
 ensureSwaggerTag('Audit Operations', 'Assignment, governance document, and review operations for audit teams');
 ensureSwaggerTag('Auditee', 'Auditee dashboard, uploads, comments, and governance document endpoints');
+ensureSwaggerTag('Team Lead', 'Team Lead dashboard and approved audit plan endpoints');
+ensureSwaggerTag('Annual Audit Plans', 'Document-style annual audit plan lifecycle, sections, approvals, and exports');
 
 Object.assign(swaggerDocument.components.schemas, {
   AssignmentProcedure: {
@@ -3697,6 +3699,34 @@ Object.assign(swaggerDocument.components.schemas, {
       body: { type: 'string' },
       visibility: { type: 'string', enum: ['internal', 'shared'] },
       createdAt: { type: 'string', format: 'date-time' }
+    }
+  },
+  AuditNotificationPayload: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      title: { type: 'string' },
+      notificationType: { type: 'string', enum: ['opening_meeting', 'closing_meeting', 'fieldwork_notice', 'document_deadline', 'general'] },
+      badgeLabel: { type: 'string' },
+      scheduledAt: { type: 'string', format: 'date-time' },
+      locationOrMode: { type: 'string', nullable: true },
+      message: { type: 'string', nullable: true },
+      status: { type: 'string', enum: ['scheduled', 'cancelled', 'completed'] },
+      responseStatus: { type: 'string', enum: ['pending', 'confirmed', 'change_requested', 'declined'] }
+    }
+  },
+  TeamLeadApprovedPlanPayload: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      planNumber: { type: 'string' },
+      title: { type: 'string' },
+      businessUnit: { type: 'string' },
+      riskRating: { type: 'string', enum: ['Very High', 'High', 'Medium', 'Low', 'Very Low'] },
+      quarters: { type: 'array', items: { type: 'string', enum: ['Q1', 'Q2', 'Q3', 'Q4'] } },
+      executionStatus: { type: 'string', enum: ['not_started', 'ongoing', 'completed'] },
+      progressPercentage: { type: 'number' },
+      teamMemberCount: { type: 'integer' }
     }
   }
 });
@@ -3862,6 +3892,57 @@ Object.assign(swaggerDocument.paths, {
 });
 
 Object.assign(swaggerDocument.paths, {
+  '/api/audit/audit-notifications': {
+    get: {
+      summary: 'List audit notifications for audit staff',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'responseStatus', in: 'query', schema: { type: 'string', enum: ['pending', 'confirmed', 'change_requested', 'declined'] } },
+        { name: 'notificationType', in: 'query', schema: { type: 'string', enum: ['opening_meeting', 'closing_meeting', 'fieldwork_notice', 'document_deadline', 'general'] } },
+        { name: 'auditeeUserId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+        { name: 'auditPlanId', in: 'query', schema: { type: 'string', format: 'uuid' } },
+        { name: 'search', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Audit notifications retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+    },
+    post: {
+      summary: 'Create an audit notification for an auditee',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['auditeeUserId', 'title', 'scheduledAt'],
+              properties: {
+                auditeeUserId: { type: 'string', format: 'uuid' },
+                auditPlanId: { type: 'string', format: 'uuid' },
+                title: { type: 'string' },
+                notificationType: { type: 'string', enum: ['opening_meeting', 'closing_meeting', 'fieldwork_notice', 'document_deadline', 'general'] },
+                badgeLabel: { type: 'string' },
+                scheduledAt: { type: 'string', format: 'date-time' },
+                locationOrMode: { type: 'string' },
+                message: { type: 'string' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '201': { description: 'Audit notification created' }, '400': { $ref: '#/components/responses/BadRequest' } }
+    }
+  },
+  '/api/audit/audit-notifications/{id}': {
+    get: {
+      summary: 'Get one audit notification',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Audit notification retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
   '/api/audit/document-requests': {
     get: {
       summary: 'List governance document requests',
@@ -4006,6 +4087,73 @@ Object.assign(swaggerDocument.paths, {
       responses: { '200': { description: 'Auditee dashboard retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
     }
   },
+  '/api/auditee/audit-notifications': {
+    get: {
+      summary: 'List auditee audit notifications',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'responseStatus', in: 'query', schema: { type: 'string', enum: ['pending', 'confirmed', 'change_requested', 'declined'] } },
+        { name: 'notificationType', in: 'query', schema: { type: 'string', enum: ['opening_meeting', 'closing_meeting', 'fieldwork_notice', 'document_deadline', 'general'] } },
+        { name: 'upcomingOnly', in: 'query', schema: { type: 'string', enum: ['true', 'false'] } },
+        { name: 'search', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Auditee audit notifications retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/auditee/audit-notifications/{id}': {
+    get: {
+      summary: 'Get one auditee audit notification',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Auditee audit notification retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/auditee/audit-notifications/{id}/confirm': {
+    post: {
+      summary: 'Confirm availability for an audit notification',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: false,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: { comment: { type: 'string' } }
+            }
+          }
+        }
+      },
+      responses: { '200': { description: 'Availability confirmed' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/auditee/audit-notifications/{id}/request-change': {
+    post: {
+      summary: 'Request a schedule change for an audit notification',
+      tags: ['Auditee'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['comment'],
+              properties: {
+                comment: { type: 'string' },
+                proposedScheduledAt: { type: 'string', format: 'date-time' }
+              }
+            }
+          }
+        }
+      },
+      responses: { '200': { description: 'Change request submitted' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
   '/api/auditee/document-requests': {
     get: {
       summary: 'List auditee document requests',
@@ -4102,6 +4250,279 @@ Object.assign(swaggerDocument.paths, {
   }
 });
 
+Object.assign(swaggerDocument.paths, {
+  '/api/team-lead/dashboard': {
+    get: {
+      summary: 'Get Team Lead dashboard summary and approved plans',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      responses: { '200': { description: 'Team Lead dashboard retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/team-lead/assignments': {
+    get: {
+      summary: 'List Team Lead audit assignments',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string', enum: ['not_started', 'ongoing', 'completed'] } },
+        { name: 'search', in: 'query', schema: { type: 'string' } },
+        { name: 'commenceableOnly', in: 'query', schema: { type: 'boolean' } }
+      ],
+      responses: { '200': { description: 'Team Lead assignments retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/commence': {
+    post: {
+      summary: 'Commence one Team Lead audit assignment',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Assignment commenced' }, '400': { description: 'Assignment cannot be commenced' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/workspace': {
+    get: {
+      summary: 'Get Team Lead audit planning workspace',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Team Lead planning workspace retrieved' }, '400': { description: 'Assignment not commenced' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    put: {
+      summary: 'Update Team Lead audit planning workspace',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Team Lead planning workspace updated' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/workspace/objectives': {
+    post: {
+      summary: 'Add one audit objective to the Team Lead planning workspace',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '201': { description: 'Audit objective added' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/workspace/objectives/{objectiveId}': {
+    delete: {
+      summary: 'Delete one audit objective from the Team Lead planning workspace',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'objectiveId', in: 'path', required: true, schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Audit objective deleted' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/workspace/methodology-document': {
+    post: {
+      summary: 'Upload Team Lead methodology document',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Methodology document uploaded' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/workspace/procedures': {
+    post: {
+      summary: 'Add one Team Lead planning test procedure',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '201': { description: 'Planning procedure added' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/workspace/procedures/{procedureId}': {
+    put: {
+      summary: 'Update one Team Lead planning test procedure',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'procedureId', in: 'path', required: true, schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Planning procedure updated' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    delete: {
+      summary: 'Delete one Team Lead planning test procedure',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'procedureId', in: 'path', required: true, schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Planning procedure deleted' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/workspace/save-draft': {
+    post: {
+      summary: 'Save Team Lead planning workspace as draft',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Planning draft saved' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/assignments/{id}/workspace/submit': {
+    post: {
+      summary: 'Submit Team Lead planning workspace for approval',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Planning workspace submitted for approval' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/approved-plans': {
+    get: {
+      summary: 'List Team Lead approved audit plans',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string', enum: ['not_started', 'ongoing', 'completed'] } },
+        { name: 'riskRating', in: 'query', schema: { type: 'string', enum: ['Very High', 'High', 'Medium', 'Low', 'Very Low'] } },
+        { name: 'quarter', in: 'query', schema: { type: 'string', enum: ['Q1', 'Q2', 'Q3', 'Q4'] } },
+        { name: 'search', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Approved plans retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
+  '/api/team-lead/approved-plans/{id}': {
+    get: {
+      summary: 'Get one Team Lead approved audit plan',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Approved plan retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  }
+});
+
+
+Object.assign(swaggerDocument.paths, {
+  '/api/annual-audit-plans': {
+    get: {
+      summary: 'List annual audit plans',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'year', in: 'query', schema: { type: 'integer' } },
+        { name: 'status', in: 'query', schema: { type: 'string' } },
+        { name: 'search', in: 'query', schema: { type: 'string' } },
+        { name: 'mineOnly', in: 'query', schema: { type: 'boolean' } }
+      ],
+      responses: { '200': { description: 'Annual audit plans retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    },
+    post: {
+      summary: 'Create annual audit plan',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      responses: { '201': { description: 'Annual audit plan created' }, '400': { description: 'Invalid request' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+    }
+  },
+  '/api/annual-audit-plans/generate-from-risk': {
+    post: {
+      summary: 'Generate annual audit plan from approved plans and risk data',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      responses: { '201': { description: 'Annual audit plan generated' }, '400': { description: 'Invalid request' }, '401': { $ref: '#/components/responses/Unauthorized' } }
+    }
+  },
+  '/api/annual-audit-plans/{id}': {
+    get: {
+      summary: 'Get one annual audit plan',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Annual audit plan retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    put: {
+      summary: 'Update annual audit plan',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Annual audit plan updated' }, '400': { description: 'Plan cannot be edited' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    delete: {
+      summary: 'Delete draft annual audit plan',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Annual audit plan deleted' }, '400': { description: 'Only draft plans can be deleted' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/annual-audit-plans/{id}/sections': {
+    put: {
+      summary: 'Replace annual audit plan sections',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Sections updated' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/annual-audit-plans/{id}/sections/{sectionId}/rows': {
+    post: {
+      summary: 'Add annual audit plan row to section',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'sectionId', in: 'path', required: true, schema: { type: 'string' } }
+      ],
+      responses: { '201': { description: 'Row added' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/annual-audit-plans/{id}/sections/{sectionId}/rows/{rowId}': {
+    put: {
+      summary: 'Update annual audit plan row',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'sectionId', in: 'path', required: true, schema: { type: 'string' } },
+        { name: 'rowId', in: 'path', required: true, schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Row updated' }, '404': { $ref: '#/components/responses/NotFound' } }
+    },
+    delete: {
+      summary: 'Delete annual audit plan row',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } },
+        { name: 'sectionId', in: 'path', required: true, schema: { type: 'string' } },
+        { name: 'rowId', in: 'path', required: true, schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Row deleted' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/annual-audit-plans/{id}/recalculate-totals': {
+    post: {
+      summary: 'Recalculate annual audit plan totals',
+      tags: ['Annual Audit Plans'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: { '200': { description: 'Totals recalculated' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/annual-audit-plans/{id}/submit': { post: { summary: 'Submit annual audit plan for review', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan submitted' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/qa-approve': { post: { summary: 'QA approve annual audit plan', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan QA approved' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/qa-reject': { post: { summary: 'QA reject annual audit plan', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan QA rejected' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/cae-approve': { post: { summary: 'CAE approve annual audit plan', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan CAE approved' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/cae-reject': { post: { summary: 'CAE reject annual audit plan', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan CAE rejected' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/board-submit': { post: { summary: 'Submit annual audit plan to board stage', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan sent to board stage' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/board-approve': { post: { summary: 'Board approve annual audit plan', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan board approved' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/board-reject': { post: { summary: 'Board reject annual audit plan', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan board rejected' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/publish': { post: { summary: 'Publish annual audit plan', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan published' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/summary': { get: { summary: 'Get annual audit plan summary', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan summary retrieved' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/export/json': { get: { summary: 'Export annual audit plan JSON', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan JSON export ready' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/export/pdf': { get: { summary: 'Prepare annual audit plan PDF payload', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan PDF payload ready' }, '404': { $ref: '#/components/responses/NotFound' } } } },
+  '/api/annual-audit-plans/{id}/export/docx': { get: { summary: 'Prepare annual audit plan DOCX payload', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan DOCX payload ready' }, '404': { $ref: '#/components/responses/NotFound' } } } }
+});
+
 const swaggerOptions = {
   explorer: true,
   customCss: `
@@ -4139,3 +4560,4 @@ module.exports = {
   swaggerDocument,
   swaggerOptions
 };
+
