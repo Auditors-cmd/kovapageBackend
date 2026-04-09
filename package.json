@@ -10,6 +10,8 @@
     "db:setup": "node scripts/setup-database.js",
     "test:docs": "node scripts/verify-documentation.js",
     "check:coverage": "node scripts/compare-docs.js",
+    "test:qa": "node scripts/test-qa-routes.js",
+    "test:cae": "node scripts/test-cae-routes.js",
     "test:endpoints": "node scripts/test-endpoints.js",
     "cleanup:endpoints": "node scripts/cleanup-endpoint-test-data.js"
   },

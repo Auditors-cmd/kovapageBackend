@@ -1,4 +1,5 @@
 const express = require('express');
+const multer = require('multer');
 const { protect } = require('../middleware/auth');
 const { hasRoleLevel } = require('../middleware/roles');
 const { Op } = require('sequelize');
@@ -12,6 +13,7 @@ const MonitoringDashboard = require('../models/MonitoringDashboard');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const AutoScheduleSubmission = require('../models/AutoScheduleSubmission');
+const HistoricalRiskScore = require('../models/HistoricalRiskScore');
 const { sequelize } = require('../config/database');
 const { uploadRiskData, deleteFromCloudinary } = require('../middleware/upload');
 const cloudinary = require('../config/cloudinary');
@@ -98,6 +100,297 @@ const groupBy = (data, key) => {
 };
 
 const QA_PLAN_QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
+const HISTORICAL_SCORE_RATINGS = ['Very High', 'High', 'Medium', 'Low', 'Very Low'];
+const historicalScoreUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    const allowedExts = ['.xlsx', '.xls', '.csv'];
+    if (allowedExts.includes(ext)) return cb(null, true);
+    return cb(new Error('Only Excel and CSV files are allowed for historical scores'));
+  }
+});
+
+const createWorkflowEntryId = (prefix) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+const ensureArray = (value) => Array.isArray(value) ? value : [];
+const safeTrim = (value) => String(value ?? '').trim();
+const parseNumber = (value, fallback = 0) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+const parseOptionalNumber = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+const getQaReviewMeta = (plan) => plan?.metadata?.qaReview || {};
+const getLatestCaeDecision = (plan) => plan?.metadata?.caeDecision?.latestDecision || null;
+const hasPendingCaeSubmission = (plan) => {
+  const submission = plan?.metadata?.caeSubmission || {};
+  return submission.submitted === true && !getLatestCaeDecision(plan);
+};
+const appendHistory = (history, entry) => [...ensureArray(history), entry];
+
+const createNotificationForUsers = async ({
+  userIds,
+  auditPlanId,
+  title,
+  message,
+  metadata = {},
+  transaction = undefined
+}) => {
+  const uniqueIds = Array.from(new Set(ensureArray(userIds).filter(Boolean)));
+  if (uniqueIds.length === 0) return 0;
+
+  await Notification.bulkCreate(
+    uniqueIds.map((userId) => ({
+      userId,
+      auditPlanId: auditPlanId || null,
+      type: 'approval',
+      title,
+      message,
+      status: 'unread',
+      metadata
+    })),
+    transaction ? { transaction } : undefined
+  );
+
+  return uniqueIds.length;
+};
+
+const buildDashboardInsights = ({ quarterComparisonRows, unitYtdRows, quarterlyDistribution, executiveSummary }) => {
+  const totalQuarterVariance = quarterComparisonRows.reduce((sum, row) => sum + row.variance, 0);
+  const highestDemandQuarter = quarterlyDistribution
+    .slice()
+    .sort((a, b) => (b.capacityPercent || 0) - (a.capacityPercent || 0))[0];
+  const topGrowingUnit = unitYtdRows
+    .slice()
+    .sort((a, b) => (b.variance || 0) - (a.variance || 0))[0];
+
+  return [
+    totalQuarterVariance >= 0
+      ? `Overall audit coverage increased by ${quarterComparisonRows.reduce((sum, row) => sum + (row.percentChange || 0), 0).toFixed(1)}% compared to the prior-year quarter mix.`
+      : `Overall audit coverage softened by ${Math.abs(totalQuarterVariance)} audit(s) compared to the prior-year quarter mix.`,
+    highestDemandQuarter
+      ? `${highestDemandQuarter.quarter} carries the highest planned demand with ${highestDemandQuarter.auditsScheduled} audit(s) and ${highestDemandQuarter.capacityPercent}% capacity utilization.`
+      : 'No quarterly demand concentration has been recorded yet.',
+    executiveSummary.resourcesRequired > executiveSummary.availableAuditors
+      ? `Resource demand exceeds current auditor availability by ${executiveSummary.resourcesRequired - executiveSummary.availableAuditors} auditor(s).`
+      : 'Resource allocation is currently within available auditor capacity.',
+    topGrowingUnit
+      ? `${topGrowingUnit.businessUnit} shows the largest year-to-date volume shift with a variance of ${topGrowingUnit.variance >= 0 ? '+' : ''}${topGrowingUnit.variance}.`
+      : 'No business-unit year-to-date variance has been recorded yet.'
+  ];
+};
+
+const normalizeTextList = (value) => {
+  if (Array.isArray(value)) return value.map((item) => safeTrim(item?.text || item)).filter(Boolean);
+  if (!value) return [];
+  return String(value)
+    .split(/\r?\n|;/)
+    .map((item) => safeTrim(item))
+    .filter(Boolean);
+};
+
+const normalizeAuditProcessSteps = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item, index) => ({
+        phase: safeTrim(item?.phase || item?.timeline || `Step ${index + 1}`),
+        activity: safeTrim(item?.activity || item?.text || item?.description || '')
+      }))
+      .filter((item) => item.phase || item.activity);
+  }
+
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line, index) => {
+      const [phase, ...rest] = String(line).split(':');
+      return {
+        phase: safeTrim(rest.length > 0 ? phase : `Step ${index + 1}`),
+        activity: safeTrim(rest.length > 0 ? rest.join(':') : phase)
+      };
+    })
+    .filter((item) => item.activity);
+};
+
+const normalizeQaApmStatus = (plan) => {
+  const planningApproval = plan?.metadata?.teamLeadPlanning?.approval || {};
+  const planningStatus = plan?.metadata?.teamLeadPlanning?.status || null;
+  if (planningApproval.targetRole === 'quality_assurance') {
+    if (planningApproval.status === 'approved' || planningStatus === 'approved') return 'approved';
+    if (planningApproval.status === 'rejected' || planningStatus === 'rejected') return 'needs_revision';
+    if (planningApproval.status === 'pending' || planningStatus === 'submitted_for_approval') return 'pending';
+  }
+
+  const apmStatus = plan?.metadata?.apm?.apmStatus || 'draft';
+  if (apmStatus === 'approved') return 'approved';
+  if (apmStatus === 'rejected') return 'needs_revision';
+  if (apmStatus === 'pending_approval') return 'pending';
+  return 'draft';
+};
+
+const isQaApmReviewCandidate = (plan) => {
+  const planning = plan?.metadata?.teamLeadPlanning;
+  if (planning?.approval?.targetRole === 'quality_assurance') return true;
+  return plan?.metadata?.apm?.qaSubmission?.submittedToQa === true;
+};
+
+const serializeQaApmReviewSummary = (plan) => {
+  const planning = plan?.metadata?.teamLeadPlanning || {};
+  const basicInformation = planning.basicInformation || {};
+  const qaStatus = normalizeQaApmStatus(plan);
+  const reviewMeta = plan?.metadata?.qaApmReview || {};
+
+  return {
+    id: plan.id,
+    apmId: plan.planNumber,
+    auditTitle: safeTrim(basicInformation.auditTitle || plan.title),
+    unitName: plan.department || 'Unassigned Unit',
+    submittedBy: planning?.approval?.submittedByName || plan?.creator?.name || null,
+    team: plan?.teamLead?.name || plan?.creator?.name || null,
+    submittedDate: planning?.approval?.submittedAt || plan?.metadata?.apm?.qaSubmission?.submittedAt || plan.createdAt,
+    duration: parseNumber(basicInformation.durationDays || plan?.metadata?.apm?.durationDays, 0),
+    auditClassification: safeTrim(basicInformation.auditClassification || plan?.metadata?.apm?.auditClassification || plan?.metadata?.apm?.classification),
+    status: qaStatus,
+    statusLabel: qaStatus === 'needs_revision' ? 'Needs Revision' : qaStatus.charAt(0).toUpperCase() + qaStatus.slice(1),
+    latestReviewComment: reviewMeta?.latestDecision?.notes || planning?.approval?.reviewComments || plan?.metadata?.apm?.reviewNotes || null
+  };
+};
+
+const serializeQaApmReviewDetail = (plan) => {
+  const planning = plan?.metadata?.teamLeadPlanning || {};
+  const basicInformation = planning.basicInformation || {};
+  const procedures = ensureArray(planning.testProcedures).map((item) => ({
+    objective: safeTrim(item?.testObjective || item?.objective || item?.title),
+    procedure: safeTrim(item?.testProcedure || item?.procedure || item?.description),
+    assignedTo: safeTrim(item?.assignedTo || item?.owner || '')
+  })).filter((item) => item.objective || item.procedure);
+  const comments = ensureArray(plan?.metadata?.qaApmReview?.history).map((item) => ({
+    id: item.id,
+    user: item.actorName,
+    text: item.notes || item.reason || '',
+    timestamp: item.timestamp,
+    action: item.action
+  }));
+
+  return {
+    id: plan.planNumber,
+    planId: plan.id,
+    submittedBy: planning?.approval?.submittedByName || plan?.creator?.name || null,
+    submittedDate: planning?.approval?.submittedAt || plan?.metadata?.apm?.qaSubmission?.submittedAt || plan.createdAt,
+    team: plan?.teamLead?.name || plan?.creator?.name || null,
+    auditTitle: safeTrim(basicInformation.auditTitle || plan.title),
+    auditClassification: safeTrim(basicInformation.auditClassification || plan?.metadata?.apm?.auditClassification || plan?.metadata?.apm?.classification),
+    duration: parseNumber(basicInformation.durationDays || plan?.metadata?.apm?.durationDays, 0),
+    unitBackground: safeTrim(planning.unitBackgroundDescription || plan.description),
+    objectives: normalizeTextList(planning.objectives),
+    scopeOfReview: safeTrim(planning.scopeOfReview || plan?.metadata?.apm?.scopeOfReview),
+    riskAnalysis: safeTrim(planning?.raca?.riskAnalysis || plan?.metadata?.apm?.riskAnalysis),
+    controlAnalysis: safeTrim(planning?.raca?.controlAnalysis || plan?.metadata?.apm?.controlAnalysis),
+    auditApproach: safeTrim(planning.auditApproach || plan?.metadata?.apm?.auditApproach),
+    auditProcess: normalizeAuditProcessSteps(planning.auditProcess || plan?.metadata?.apm?.auditProcess),
+    testProcedures: procedures,
+    status: normalizeQaApmStatus(plan),
+    comments
+  };
+};
+
+const buildQaApmReviewMetadata = ({ plan, actor, status, notes, reason = null }) => {
+  const previous = plan?.metadata?.qaApmReview || {};
+  const entry = {
+    id: createWorkflowEntryId('qa-apm-review'),
+    action: status,
+    actorId: actor.id,
+    actorName: actor.name,
+    actorRole: actor.role,
+    timestamp: new Date().toISOString(),
+    notes: notes || null,
+    reason: reason || null
+  };
+
+  return {
+    ...previous,
+    status,
+    latestDecision: entry,
+    history: appendHistory(previous.history, entry)
+  };
+};
+
+const createHistoricalScoresTemplate = () => {
+  const workbook = XLSX.utils.book_new();
+  const dataSheet = XLSX.utils.aoa_to_sheet([
+    ['Unit Name', 'Classification', 'Audit Responsible Unit', 'Operational Risk Score', 'Risk Rating', 'Current Audit Score', 'Audit Period', 'Source Year', 'Notes'],
+    ['Financial Crime', 'ERG', 'Internal Audit - Risk', 90, 'Very High', 20, 'FY 2024 Q3', 2024, 'Imported from prior-year audit cycle']
+  ]);
+  dataSheet['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 24 }, { wch: 22 }, { wch: 18 }, { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 32 }];
+  XLSX.utils.book_append_sheet(workbook, dataSheet, 'Historical Scores');
+
+  const instructionSheet = XLSX.utils.aoa_to_sheet([
+    ['Historical Risk Score Upload'],
+    [],
+    ['Column', 'Description'],
+    ['Unit Name', 'Business unit or audit area name'],
+    ['Classification', 'Classification used during the prior audit cycle'],
+    ['Audit Responsible Unit', 'Owning audit unit from the prior cycle'],
+    ['Operational Risk Score', 'Numeric value between 0 and 100'],
+    ['Risk Rating', 'Very High, High, Medium, Low, or Very Low'],
+    ['Current Audit Score', 'Previous audit score used for planning'],
+    ['Audit Period', 'Quarter or fiscal period such as FY 2024 Q3'],
+    ['Source Year', 'Historical year for this score'],
+    ['Notes', 'Optional context or evidence source']
+  ]);
+  instructionSheet['!cols'] = [{ wch: 26 }, { wch: 60 }];
+  XLSX.utils.book_append_sheet(workbook, instructionSheet, 'Instructions');
+  return workbook;
+};
+
+const normalizeHistoricalScoreRow = (row = {}, batchMeta = {}) => {
+  const unitName = safeTrim(
+    row['Unit Name'] ||
+    row.unitName ||
+    row.Unit ||
+    row.unit
+  );
+  if (!unitName) return null;
+
+  const auditPeriod = safeTrim(row['Audit Period'] || row.auditPeriod || row.Period);
+  const sourceQuarterMatch = auditPeriod.toUpperCase().match(/Q[1-4]/);
+  const sourceYear = parseOptionalNumber(row['Source Year'] || row.sourceYear || row.Year);
+
+  return {
+    unitName,
+    classification: safeTrim(row.Classification || row.classification) || null,
+    auditResponsibleUnit: safeTrim(row['Audit Responsible Unit'] || row.auditResponsibleUnit || row.auditUnit) || null,
+    operationalRiskScore: parseOptionalNumber(row['Operational Risk Score'] || row.operationalRiskScore || row.riskScore),
+    riskRating: safeTrim(row['Risk Rating'] || row.riskRating) || null,
+    currentAuditScore: parseOptionalNumber(row['Current Audit Score'] || row.currentAuditScore || row.auditScore),
+    auditPeriod: auditPeriod || null,
+    sourceYear,
+    sourceQuarter: sourceQuarterMatch ? sourceQuarterMatch[0] : null,
+    notes: safeTrim(row.Notes || row.notes) || null,
+    batchId: batchMeta.batchId,
+    originalFileName: batchMeta.originalFileName,
+    metadata: {
+      importedAt: batchMeta.importedAt,
+      importedBy: batchMeta.importedBy,
+      source: 'qa_historical_upload'
+    }
+  };
+};
+
+const parseHistoricalScoreRowsFromFile = (file) => {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  if (ext === '.csv') {
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+    return XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+  }
+
+  const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+  const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+  return XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
+};
 
 const getQaPlanInclude = () => ([
   {
@@ -1131,12 +1424,10 @@ router.get('/dashboard-data', async (req, res) => {
     }
 
     try {
-      pendingApprovals = await AuditPlan.count({
-        where: sequelize.where(
-          sequelize.literal(`COALESCE(("metadata"->'caeSubmission'->>'submitted')::boolean, false)`),
-          true
-        )
-      }) || 0;
+      const caePendingPlans = await AuditPlan.findAll({
+        attributes: ['id', 'metadata']
+      });
+      pendingApprovals = caePendingPlans.filter(hasPendingCaeSubmission).length;
     } catch (err) {
       console.log('Error counting pending approvals:', err.message);
     }
@@ -1351,6 +1642,25 @@ router.get('/dashboard-data', async (req, res) => {
     unitTotals.variance = unitTotals.currentYtd - unitTotals.priorYtd;
     unitTotals.percentChange = calculatePercentChange(unitTotals.priorYtd, unitTotals.currentYtd);
 
+    const keyInsights = buildDashboardInsights({
+      quarterComparisonRows,
+      unitYtdRows,
+      quarterlyDistribution: quarterOrder.map((quarter) => {
+        const current = auditPerformance.currentYear.quarters[quarter] || 0;
+        const resources = auditorCapacityHours > 0 ? current : 0;
+        return {
+          quarter,
+          auditsScheduled: current,
+          resources,
+          capacityPercent: availableAuditors > 0 ? Number(((resources / availableAuditors) * 100).toFixed(1)) : 0
+        };
+      }),
+      executiveSummary: {
+        resourcesRequired,
+        availableAuditors
+      }
+    });
+
     const dashboardData = {
       charts: {
         auditPerformance: {
@@ -1479,6 +1789,7 @@ router.get('/dashboard-data', async (req, res) => {
         budgetAllocated,
         budgetCurrency
       },
+      keyInsights,
       summary: {
         totalAudits,
         pendingReviews: pendingPlansCount,
@@ -1534,7 +1845,7 @@ router.get('/audit-plans', async (req, res) => {
     }
 
     const planDashboard = buildPlanDashboardData(plans, availableAuditors, auditorCapacityHours);
-    const submittedToCae = plans.filter(p => p?.metadata?.caeSubmission?.submitted === true).length;
+    const submittedToCae = plans.filter(hasPendingCaeSubmission).length;
 
     res.json({
       success: true,
@@ -2304,6 +2615,960 @@ router.post('/consolidate-plans', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error consolidating plans'
+    });
+  }
+});
+
+// @desc    List QA APM review items
+// @route   GET /api/qa/apm
+// @access  Quality Assurance and above
+router.get('/apm', async (req, res) => {
+  try {
+    const { status, department } = req.query;
+    const where = {};
+    if (department) where.department = department;
+
+    const plans = await AuditPlan.findAll({
+      where,
+      include: getQaPlanInclude(),
+      order: [['createdAt', 'DESC']]
+    });
+
+    let rows = plans
+      .filter(isQaApmReviewCandidate)
+      .map(serializeQaApmReviewSummary);
+
+    if (status) {
+      rows = rows.filter((row) => row.status === String(status).trim().toLowerCase());
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        rows,
+        summary: {
+          total: rows.length,
+          pending: rows.filter((row) => row.status === 'pending').length,
+          approved: rows.filter((row) => row.status === 'approved').length,
+          needsRevision: rows.filter((row) => row.status === 'needs_revision').length
+        }
+      }
+    });
+  } catch (error) {
+    console.error('QA APM list error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching QA APM review items',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Get one QA APM review item
+// @route   GET /api/qa/apm/:id
+// @access  Quality Assurance and above
+router.get('/apm/:id', async (req, res) => {
+  try {
+    const plan = await AuditPlan.findByPk(req.params.id, {
+      include: getQaPlanInclude()
+    });
+
+    if (!plan || !isQaApmReviewCandidate(plan)) {
+      return res.status(404).json({
+        success: false,
+        message: 'QA APM review item not found'
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: serializeQaApmReviewDetail(plan)
+    });
+  } catch (error) {
+    console.error('QA APM detail error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching QA APM review item',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Approve QA APM review item
+// @route   POST /api/qa/apm/:id/approve
+// @access  Quality Assurance and above
+router.post('/apm/:id/approve', async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { notes } = req.body || {};
+    const plan = await AuditPlan.findByPk(req.params.id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    if (!plan || !isQaApmReviewCandidate(plan)) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'QA APM review item not found'
+      });
+    }
+
+    const currentMeta = plan.metadata || {};
+    const planning = currentMeta.teamLeadPlanning || null;
+    const currentApproval = planning?.approval || {};
+    const reviewedAt = new Date().toISOString();
+    const nextMetadata = {
+      ...currentMeta,
+      qaApmReview: buildQaApmReviewMetadata({
+        plan,
+        actor: req.user,
+        status: 'approved',
+        notes
+      })
+    };
+
+    if (planning) {
+      nextMetadata.teamLeadPlanning = {
+        ...planning,
+        status: 'approved',
+        approval: {
+          ...currentApproval,
+          status: 'approved',
+          statusLabel: 'Approved',
+          reviewedAt,
+          reviewedBy: req.user.id,
+          reviewedByName: req.user.name,
+          reviewComments: notes || null
+        },
+        workflowHistory: appendHistory(planning.workflowHistory, {
+          id: createWorkflowEntryId('team-lead-qa-approval'),
+          type: 'qa_approved',
+          at: reviewedAt,
+          actorId: req.user.id,
+          actorName: req.user.name,
+          actorRole: req.user.role,
+          notes: notes || null
+        })
+      };
+    }
+
+    if (currentMeta.apm) {
+      nextMetadata.apm = {
+        ...currentMeta.apm,
+        reviewedAt,
+        reviewedBy: req.user.id,
+        reviewedByName: req.user.name,
+        reviewNotes: notes || null,
+        qaReviewStatus: 'approved'
+      };
+    }
+
+    await plan.update({ metadata: nextMetadata }, { transaction });
+
+    await createNotificationForUsers({
+      userIds: [plan.createdBy, plan.teamLeadId].filter((id) => id && id !== req.user.id),
+      auditPlanId: plan.id,
+      title: `QA approved APM review (${plan.planNumber})`,
+      message: `${req.user.name} approved ${plan.title} for the QA APM workflow.`,
+      metadata: {
+        auditPlanId: plan.id,
+        qaApmReviewStatus: 'approved',
+        reviewedAt
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.json({
+      success: true,
+      message: 'QA APM review approved successfully',
+      data: {
+        id: plan.id,
+        status: 'approved',
+        reviewedAt,
+        reviewedBy: req.user.name
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('QA APM approve error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error approving QA APM review item',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Reject QA APM review item
+// @route   POST /api/qa/apm/:id/reject
+// @access  Quality Assurance and above
+router.post('/apm/:id/reject', async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { reason, notes } = req.body || {};
+    if (!reason || safeTrim(reason).length < 3) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a rejection reason of at least 3 characters'
+      });
+    }
+
+    const plan = await AuditPlan.findByPk(req.params.id, {
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    if (!plan || !isQaApmReviewCandidate(plan)) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'QA APM review item not found'
+      });
+    }
+
+    const currentMeta = plan.metadata || {};
+    const planning = currentMeta.teamLeadPlanning || null;
+    const currentApproval = planning?.approval || {};
+    const reviewedAt = new Date().toISOString();
+    const decisionNotes = notes || safeTrim(reason);
+    const nextMetadata = {
+      ...currentMeta,
+      qaApmReview: buildQaApmReviewMetadata({
+        plan,
+        actor: req.user,
+        status: 'rejected',
+        notes: decisionNotes,
+        reason: safeTrim(reason)
+      })
+    };
+
+    if (planning) {
+      nextMetadata.teamLeadPlanning = {
+        ...planning,
+        status: 'rejected',
+        approval: {
+          ...currentApproval,
+          status: 'rejected',
+          statusLabel: 'Rejected',
+          reviewedAt,
+          reviewedBy: req.user.id,
+          reviewedByName: req.user.name,
+          reviewComments: decisionNotes
+        },
+        workflowHistory: appendHistory(planning.workflowHistory, {
+          id: createWorkflowEntryId('team-lead-qa-rejection'),
+          type: 'qa_rejected',
+          at: reviewedAt,
+          actorId: req.user.id,
+          actorName: req.user.name,
+          actorRole: req.user.role,
+          notes: decisionNotes
+        })
+      };
+    }
+
+    if (currentMeta.apm) {
+      nextMetadata.apm = {
+        ...currentMeta.apm,
+        reviewedAt,
+        reviewedBy: req.user.id,
+        reviewedByName: req.user.name,
+        reviewNotes: decisionNotes,
+        rejectionReason: safeTrim(reason),
+        qaReviewStatus: 'rejected'
+      };
+    }
+
+    await plan.update({ metadata: nextMetadata }, { transaction });
+
+    await createNotificationForUsers({
+      userIds: [plan.createdBy, plan.teamLeadId].filter((id) => id && id !== req.user.id),
+      auditPlanId: plan.id,
+      title: `QA requested APM updates (${plan.planNumber})`,
+      message: `${req.user.name} returned ${plan.title} for updates. Reason: ${safeTrim(reason)}.`,
+      metadata: {
+        auditPlanId: plan.id,
+        qaApmReviewStatus: 'rejected',
+        reviewedAt,
+        reason: safeTrim(reason)
+      },
+      transaction
+    });
+
+    await transaction.commit();
+
+    return res.json({
+      success: true,
+      message: 'QA APM review returned for revision',
+      data: {
+        id: plan.id,
+        status: 'needs_revision',
+        reviewedAt,
+        reviewedBy: req.user.name
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('QA APM reject error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error rejecting QA APM review item',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Get detailed QA review history for one audit plan
+// @route   GET /api/qa/audit-plans/:id/review
+// @access  Quality Assurance and above
+router.get('/audit-plans/:id/review', async (req, res) => {
+  try {
+    const plan = await AuditPlan.findByPk(req.params.id, {
+      include: getQaPlanInclude()
+    });
+
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Audit plan not found'
+      });
+    }
+
+    const qaReview = getQaReviewMeta(plan);
+    return res.json({
+      success: true,
+      data: {
+        id: plan.id,
+        planNumber: plan.planNumber,
+        title: plan.title,
+        unitName: plan.department || 'Unassigned Unit',
+        status: plan.status,
+        qaReviewStatus: qaReview.reviewStatus || null,
+        latestComment: qaReview.latestComment || null,
+        latestModificationRequest: qaReview.latestModificationRequest || null,
+        commentHistory: ensureArray(qaReview.commentHistory),
+        modificationHistory: ensureArray(qaReview.modificationHistory),
+        caeSubmission: plan?.metadata?.caeSubmission || null,
+        caeDecision: plan?.metadata?.caeDecision || null
+      }
+    });
+  } catch (error) {
+    console.error('QA audit plan review detail error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching audit plan review details',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Add QA comments/recommendations to audit plans
+// @route   POST /api/qa/audit-plans/comments
+// @access  Quality Assurance and above
+router.post('/audit-plans/comments', async (req, res) => {
+  try {
+    const { planIds, comment, recommendationType } = req.body || {};
+    const validPlanIds = ensureArray(planIds).filter(Boolean);
+
+    if (validPlanIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide at least one plan ID'
+      });
+    }
+
+    if (!comment || safeTrim(comment).length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'Comment must be at least 3 characters long'
+      });
+    }
+
+    const plans = await fetchAuditPlans({ ids: validPlanIds });
+    if (plans.length !== validPlanIds.length) {
+      return res.status(404).json({
+        success: false,
+        message: 'One or more selected plans were not found'
+      });
+    }
+
+    const entry = {
+      id: createWorkflowEntryId('qa-plan-comment'),
+      comment: safeTrim(comment),
+      recommendationType: safeTrim(recommendationType) || 'general',
+      createdAt: new Date().toISOString(),
+      createdBy: req.user.id,
+      createdByName: req.user.name
+    };
+
+    for (const plan of plans) {
+      const currentMeta = plan.metadata || {};
+      const qaReview = currentMeta.qaReview || {};
+      await plan.update({
+        metadata: {
+          ...currentMeta,
+          qaReview: {
+            ...qaReview,
+            reviewStatus: qaReview.reviewStatus || 'commented',
+            latestComment: entry,
+            commentHistory: appendHistory(qaReview.commentHistory, entry)
+          }
+        }
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Added QA comments to ${plans.length} plan${plans.length !== 1 ? 's' : ''}`,
+      data: {
+        commentId: entry.id,
+        planIds: plans.map((plan) => plan.id)
+      }
+    });
+  } catch (error) {
+    console.error('QA audit plan comments error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error saving QA comments',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Request modifications for selected audit plans
+// @route   POST /api/qa/audit-plans/request-modifications
+// @access  Quality Assurance and above
+router.post('/audit-plans/request-modifications', async (req, res) => {
+  const transaction = await sequelize.transaction();
+  try {
+    const { planIds, comment } = req.body || {};
+    const validPlanIds = ensureArray(planIds).filter(Boolean);
+
+    if (validPlanIds.length === 0) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide at least one plan ID'
+      });
+    }
+
+    if (!comment || safeTrim(comment).length < 5) {
+      await transaction.rollback();
+      return res.status(400).json({
+        success: false,
+        message: 'Modification comment must be at least 5 characters long'
+      });
+    }
+
+    const plans = await AuditPlan.findAll({
+      where: { id: validPlanIds },
+      transaction,
+      lock: transaction.LOCK.UPDATE
+    });
+
+    if (plans.length !== validPlanIds.length) {
+      await transaction.rollback();
+      return res.status(404).json({
+        success: false,
+        message: 'One or more selected plans were not found'
+      });
+    }
+
+    const requestedAt = new Date().toISOString();
+    for (const plan of plans) {
+      const currentMeta = plan.metadata || {};
+      const qaReview = currentMeta.qaReview || {};
+      const modificationEntry = {
+        id: createWorkflowEntryId('qa-modification'),
+        comment: safeTrim(comment),
+        requestedAt,
+        requestedBy: req.user.id,
+        requestedByName: req.user.name
+      };
+      const nextMetadata = {
+        ...currentMeta,
+        qaReview: {
+          ...qaReview,
+          reviewStatus: 'modification_requested',
+          latestModificationRequest: modificationEntry,
+          latestComment: modificationEntry,
+          commentHistory: appendHistory(qaReview.commentHistory, modificationEntry),
+          modificationHistory: appendHistory(qaReview.modificationHistory, modificationEntry)
+        },
+        caeSubmission: currentMeta.caeSubmission
+          ? {
+              ...currentMeta.caeSubmission,
+              submitted: false,
+              withdrawnAt: requestedAt,
+              withdrawnBy: req.user.id,
+              withdrawnByName: req.user.name
+            }
+          : currentMeta.caeSubmission
+      };
+
+      if (currentMeta.teamLeadPlanning) {
+        nextMetadata.teamLeadPlanning = {
+          ...currentMeta.teamLeadPlanning,
+          status: 'rejected',
+          approval: {
+            ...(currentMeta.teamLeadPlanning.approval || {}),
+            status: 'rejected',
+            statusLabel: 'Rejected',
+            reviewedAt: requestedAt,
+            reviewedBy: req.user.id,
+            reviewedByName: req.user.name,
+            reviewComments: safeTrim(comment)
+          },
+          workflowHistory: appendHistory(currentMeta.teamLeadPlanning.workflowHistory, {
+            id: createWorkflowEntryId('qa-plan-modification'),
+            type: 'qa_requested_modification',
+            at: requestedAt,
+            actorId: req.user.id,
+            actorName: req.user.name,
+            actorRole: req.user.role,
+            notes: safeTrim(comment)
+          })
+        };
+      }
+
+      await plan.update({
+        status: 'under_review',
+        metadata: nextMetadata
+      }, { transaction });
+
+      const unitHeads = await User.findAll({
+        where: {
+          role: 'unit_head',
+          isActive: true,
+          ...(plan.department ? { department: plan.department } : {})
+        },
+        attributes: ['id'],
+        transaction
+      });
+
+      await createNotificationForUsers({
+        userIds: [
+          plan.createdBy,
+          plan.teamLeadId,
+          ...unitHeads.map((user) => user.id)
+        ].filter((id) => id && id !== req.user.id),
+        auditPlanId: plan.id,
+        title: `QA requested plan modifications (${plan.planNumber})`,
+        message: `${req.user.name} requested modifications for ${plan.title}.`,
+        metadata: {
+          auditPlanId: plan.id,
+          requestType: 'qa_modification',
+          requestedAt,
+          comment: safeTrim(comment)
+        },
+        transaction
+      });
+    }
+
+    await transaction.commit();
+
+    return res.json({
+      success: true,
+      message: `Requested modifications for ${plans.length} plan${plans.length !== 1 ? 's' : ''}`,
+      data: {
+        planIds: plans.map((plan) => plan.id),
+        requestedAt
+      }
+    });
+  } catch (error) {
+    await transaction.rollback();
+    console.error('QA request modifications error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error requesting plan modifications',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Get report review data for QA
+// @route   GET /api/qa/report-review
+// @access  Quality Assurance and above
+router.get('/report-review', async (req, res) => {
+  try {
+    const { department } = req.query;
+    const plans = await fetchAuditPlans({ department });
+    const rows = plans
+      .filter((plan) => plan.status === 'consolidated' || plan.status === 'implemented' || plan?.metadata?.caeSubmission || plan?.metadata?.caeDecision)
+      .map((plan) => {
+        const latestComment = getQaReviewMeta(plan)?.latestComment || null;
+        const latestDecision = getLatestCaeDecision(plan);
+        return {
+          id: plan.id,
+          planNumber: plan.planNumber,
+          title: plan.title,
+          unitName: plan.department || 'Unassigned Unit',
+          workflowStatus: plan.status,
+          riskRating: deriveRiskRating(deriveRiskScore(plan), plan),
+          submittedToCaeAt: plan?.metadata?.caeSubmission?.submittedAt || null,
+          caeDecisionStatus: latestDecision?.status || 'pending',
+          caeDecisionAt: latestDecision?.decidedAt || null,
+          latestQaComment: latestComment?.comment || null
+        };
+      });
+
+    return res.json({
+      success: true,
+      data: {
+        rows,
+        summary: {
+          total: rows.length,
+          pending: rows.filter((row) => row.caeDecisionStatus === 'pending').length,
+          approved: rows.filter((row) => row.caeDecisionStatus === 'approved').length,
+          rejected: rows.filter((row) => row.caeDecisionStatus === 'rejected').length
+        }
+      }
+    });
+  } catch (error) {
+    console.error('QA report review error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching QA report review data',
+      error: error.message
+    });
+  }
+});
+router.get('/reports', (req, res) => res.redirect('/api/qa/report-review'));
+
+// @desc    Get synthesized survey-style analytics for QA
+// @route   GET /api/qa/survey-results
+// @access  Quality Assurance and above
+router.get('/survey-results', async (req, res) => {
+  try {
+    const [assessments, plans, historicalScores] = await Promise.all([
+      RiskAssessment.findAll({ order: [['createdAt', 'DESC']] }),
+      fetchAuditPlans({}),
+      HistoricalRiskScore.findAll({ order: [['createdAt', 'DESC']] })
+    ]);
+
+    const assessmentStatus = assessments.reduce((acc, item) => {
+      acc[item.status] = (acc[item.status] || 0) + 1;
+      return acc;
+    }, {});
+
+    const riskBandCounts = plans.reduce((acc, plan) => {
+      const rating = deriveRiskRating(deriveRiskScore(plan), plan);
+      acc[rating] = (acc[rating] || 0) + 1;
+      return acc;
+    }, {});
+
+    const departmentResults = plans.reduce((acc, plan) => {
+      const key = plan.department || 'Unassigned';
+      if (!acc[key]) {
+        acc[key] = {
+          department: key,
+          planCount: 0,
+          totalRiskScore: 0
+        };
+      }
+      acc[key].planCount += 1;
+      acc[key].totalRiskScore += deriveRiskScore(plan);
+      return acc;
+    }, {});
+
+    const departmentRows = Object.values(departmentResults).map((row) => ({
+      department: row.department,
+      planCount: row.planCount,
+      averageRiskScore: row.planCount > 0 ? Number((row.totalRiskScore / row.planCount).toFixed(1)) : 0
+    }));
+
+    return res.json({
+      success: true,
+      data: {
+        generatedFrom: 'risk_assessments_and_audit_plans',
+        summary: {
+          totalAssessments: assessments.length,
+          totalPlans: plans.length,
+          historicalScores: historicalScores.length
+        },
+        assessmentStatus,
+        riskBandCounts,
+        departmentRows,
+        insights: [
+          `${plans.length} audit plan(s) are currently available for QA analytics.`,
+          `${historicalScores.length} historical score row(s) are available for comparative planning.`,
+          Object.keys(assessmentStatus).length > 0
+            ? `Current assessment statuses tracked: ${Object.keys(assessmentStatus).join(', ')}.`
+            : 'No assessment statuses have been recorded yet.'
+        ]
+      }
+    });
+  } catch (error) {
+    console.error('QA survey results error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching QA survey results',
+      error: error.message
+    });
+  }
+});
+router.get('/survey', (req, res) => res.redirect('/api/qa/survey-results'));
+
+// @desc    Get QA audit history timeline
+// @route   GET /api/qa/history
+// @access  Quality Assurance and above
+router.get('/history', async (req, res) => {
+  try {
+    const { department, limit } = req.query;
+    const plans = await fetchAuditPlans({ department });
+    const assessments = await RiskAssessment.findAll({
+      where: department ? { department } : undefined,
+      order: [['createdAt', 'DESC']]
+    });
+
+    const events = [];
+
+    for (const plan of plans) {
+      events.push({
+        id: `plan-created-${plan.id}`,
+        sourceType: 'audit_plan',
+        auditPlanId: plan.id,
+        planNumber: plan.planNumber,
+        title: plan.title,
+        unitName: plan.department || 'Unassigned Unit',
+        eventType: 'plan_created',
+        description: `Audit plan ${plan.title} was created.`,
+        timestamp: plan.createdAt
+      });
+
+      const qaReview = getQaReviewMeta(plan);
+      ensureArray(qaReview.commentHistory).forEach((entry) => {
+        events.push({
+          id: entry.id,
+          sourceType: 'audit_plan',
+          auditPlanId: plan.id,
+          planNumber: plan.planNumber,
+          title: plan.title,
+          unitName: plan.department || 'Unassigned Unit',
+          eventType: 'qa_comment',
+          description: entry.comment,
+          timestamp: entry.createdAt,
+          actorName: entry.createdByName || null
+        });
+      });
+
+      ensureArray(qaReview.modificationHistory).forEach((entry) => {
+        events.push({
+          id: entry.id,
+          sourceType: 'audit_plan',
+          auditPlanId: plan.id,
+          planNumber: plan.planNumber,
+          title: plan.title,
+          unitName: plan.department || 'Unassigned Unit',
+          eventType: 'modification_requested',
+          description: entry.comment,
+          timestamp: entry.requestedAt,
+          actorName: entry.requestedByName || null
+        });
+      });
+
+      ensureArray(plan?.metadata?.caeSubmissionHistory).forEach((entry) => {
+        events.push({
+          id: `${entry.submissionId}-${plan.id}`,
+          sourceType: 'audit_plan',
+          auditPlanId: plan.id,
+          planNumber: plan.planNumber,
+          title: plan.title,
+          unitName: plan.department || 'Unassigned Unit',
+          eventType: 'submitted_to_cae',
+          description: entry.notes || 'Plan submitted to CAE',
+          timestamp: entry.submittedAt,
+          actorName: entry.submittedBy || entry.submittedByName || null
+        });
+      });
+
+      ensureArray(plan?.metadata?.caeDecision?.history).forEach((entry) => {
+        events.push({
+          id: `${entry.submissionId}-${entry.status}-${plan.id}`,
+          sourceType: 'audit_plan',
+          auditPlanId: plan.id,
+          planNumber: plan.planNumber,
+          title: plan.title,
+          unitName: plan.department || 'Unassigned Unit',
+          eventType: `cae_${entry.status}`,
+          description: entry.decisionNotes || `CAE ${entry.status}`,
+          timestamp: entry.decidedAt,
+          actorName: entry.decidedByName || null
+        });
+      });
+
+      ensureArray(plan?.metadata?.qaApmReview?.history).forEach((entry) => {
+        events.push({
+          id: entry.id,
+          sourceType: 'audit_plan',
+          auditPlanId: plan.id,
+          planNumber: plan.planNumber,
+          title: plan.title,
+          unitName: plan.department || 'Unassigned Unit',
+          eventType: `qa_apm_${entry.action}`,
+          description: entry.notes || entry.reason || `QA APM ${entry.action}`,
+          timestamp: entry.timestamp,
+          actorName: entry.actorName || null
+        });
+      });
+    }
+
+    for (const assessment of assessments) {
+      events.push({
+        id: `risk-assessment-${assessment.id}`,
+        sourceType: 'risk_assessment',
+        riskAssessmentId: assessment.id,
+        title: assessment.title,
+        unitName: assessment.department || 'Unassigned Unit',
+        eventType: 'risk_assessment_uploaded',
+        description: assessment.originalFileName || assessment.title,
+        timestamp: assessment.createdAt
+      });
+    }
+
+    const sorted = events
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .slice(0, Math.max(1, parseNumber(limit, 100)));
+
+    return res.json({
+      success: true,
+      data: {
+        rows: sorted,
+        summary: {
+          totalEvents: events.length,
+          returned: sorted.length,
+          auditPlans: plans.length,
+          riskAssessments: assessments.length
+        }
+      }
+    });
+  } catch (error) {
+    console.error('QA history error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching QA audit history',
+      error: error.message
+    });
+  }
+});
+router.get('/audit-history', (req, res) => res.redirect('/api/qa/history'));
+
+// @desc    Download historical score upload template
+// @route   GET /api/qa/historical-scores/template
+// @access  Quality Assurance and above
+router.get('/historical-scores/template', (req, res) => {
+  try {
+    const workbook = createHistoricalScoresTemplate();
+    const fileBuffer = XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', 'attachment; filename=historical-risk-template.xlsx');
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    return res.send(fileBuffer);
+  } catch (error) {
+    console.error('Historical score template error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error generating historical score template',
+      error: error.message
+    });
+  }
+});
+router.get('/historical-scores/download-template', (req, res) => res.redirect('/api/qa/historical-scores/template'));
+
+// @desc    List stored historical risk scores
+// @route   GET /api/qa/historical-scores
+// @access  Quality Assurance and above
+router.get('/historical-scores', async (req, res) => {
+  try {
+    const { sourceYear, unitName } = req.query;
+    const where = {};
+    if (sourceYear) where.sourceYear = Number(sourceYear);
+    if (unitName) where.unitName = unitName;
+
+    const rows = await HistoricalRiskScore.findAll({
+      where,
+      order: [['sourceYear', 'DESC'], ['createdAt', 'DESC']]
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        rows,
+        summary: {
+          total: rows.length,
+          distinctUnits: new Set(rows.map((row) => row.unitName)).size,
+          distinctYears: new Set(rows.map((row) => row.sourceYear).filter(Boolean)).size
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Historical scores list error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching historical scores',
+      error: error.message
+    });
+  }
+});
+
+// @desc    Upload historical risk scores
+// @route   POST /api/qa/historical-scores/upload
+// @access  Quality Assurance and above
+router.post('/historical-scores/upload', historicalScoreUpload.single('riskFile'), async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please upload a historical score file'
+      });
+    }
+
+    const parsedRows = parseHistoricalScoreRowsFromFile(req.file);
+    const importedAt = new Date().toISOString();
+    const batchId = `HIST-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const normalizedRows = parsedRows
+      .map((row) => normalizeHistoricalScoreRow(row, {
+        batchId,
+        originalFileName: req.file.originalname,
+        importedAt,
+        importedBy: req.user.id
+      }))
+      .filter(Boolean);
+
+    if (normalizedRows.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid historical score rows were found in the uploaded file'
+      });
+    }
+
+    const payload = normalizedRows.map((row) => ({
+      ...row,
+      createdBy: req.user.id,
+      updatedBy: req.user.id
+    }));
+
+    const created = await HistoricalRiskScore.bulkCreate(payload, { returning: true });
+
+    return res.status(201).json({
+      success: true,
+      message: `Uploaded ${created.length} historical score row(s)`,
+      data: {
+        batchId,
+        importedAt,
+        rowCount: created.length,
+        rows: created
+      }
+    });
+  } catch (error) {
+    console.error('Historical score upload error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Error uploading historical scores',
+      error: error.message
     });
   }
 });

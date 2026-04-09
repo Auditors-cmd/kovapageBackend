@@ -47,6 +47,7 @@ const AutoScheduleSubmission = require('./models/AutoScheduleSubmission');
 const DocumentRequest = require('./models/DocumentRequest');
 const GovernanceDocument = require('./models/GovernanceDocument');
 const DocumentComment = require('./models/DocumentComment');
+const HistoricalRiskScore = require('./models/HistoricalRiskScore');
 
 
 // SET UP ASSOCIATIONS - IMPROVED VERSION
@@ -69,7 +70,8 @@ const setupAssociations = () => {
     AutoScheduleSubmission,
     DocumentRequest,
     GovernanceDocument,
-    DocumentComment
+    DocumentComment,
+    HistoricalRiskScore
   };
 
   // Initialize associations for each model that has an associate method
@@ -87,7 +89,8 @@ const setupAssociations = () => {
     AutoScheduleSubmission,
     DocumentRequest,
     GovernanceDocument,
-    DocumentComment
+    DocumentComment,
+    HistoricalRiskScore
   ];
 
   modelsWithAssociations.forEach(model => {
@@ -275,6 +278,8 @@ app.get('/', (req, res) => {
       'GET  /api/audit/governance-documents',
       'GET  /api/auditee/document-requests',
       'GET  /api/auditee/governance-documents',
+      'POST /api/team-lead/document-requests/preview',
+      'POST /api/team-lead/document-requests/bulk',
       'GET  /api/team-lead/dashboard',
       'GET  /api/team-lead/approved-plans',
       'GET  /api/team-lead/assignments',

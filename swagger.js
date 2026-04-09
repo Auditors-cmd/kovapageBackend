@@ -3616,6 +3616,7 @@ ensureSwaggerTag('Audit Operations', 'Assignment, governance document, and revie
 ensureSwaggerTag('Auditee', 'Auditee dashboard, uploads, comments, and governance document endpoints');
 ensureSwaggerTag('Team Lead', 'Team Lead dashboard and approved audit plan endpoints');
 ensureSwaggerTag('Annual Audit Plans', 'Document-style annual audit plan lifecycle, sections, approvals, and exports');
+ensureSwaggerTag('Chief Audit Executive', 'Chief Audit Executive review and decision endpoints');
 
 Object.assign(swaggerDocument.components.schemas, {
   AssignmentProcedure: {
@@ -3727,6 +3728,191 @@ Object.assign(swaggerDocument.components.schemas, {
       executionStatus: { type: 'string', enum: ['not_started', 'ongoing', 'completed'] },
       progressPercentage: { type: 'number' },
       teamMemberCount: { type: 'integer' }
+    }
+  },
+  QaApmReviewSummary: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      apmId: { type: 'string', example: 'APM-2026-001' },
+      auditTitle: { type: 'string', example: 'Financial Crime Review' },
+      unitName: { type: 'string', example: 'Financial Crime' },
+      submittedBy: { type: 'string', nullable: true },
+      team: { type: 'string', nullable: true },
+      submittedDate: { type: 'string', format: 'date-time', nullable: true },
+      duration: { type: 'integer', example: 30 },
+      auditClassification: { type: 'string', nullable: true },
+      status: { type: 'string', enum: ['pending', 'approved', 'needs_revision', 'draft'] },
+      statusLabel: { type: 'string', example: 'Pending' },
+      latestReviewComment: { type: 'string', nullable: true }
+    }
+  },
+  QaPlanReviewPayload: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      planNumber: { type: 'string', example: 'EP-PLAN-123' },
+      title: { type: 'string' },
+      unitName: { type: 'string' },
+      status: { type: 'string' },
+      qaReviewStatus: { type: 'string', nullable: true },
+      latestComment: { type: 'object', nullable: true },
+      latestModificationRequest: { type: 'object', nullable: true },
+      commentHistory: { type: 'array', items: { type: 'object' } },
+      modificationHistory: { type: 'array', items: { type: 'object' } },
+      caeSubmission: { type: 'object', nullable: true },
+      caeDecision: { type: 'object', nullable: true }
+    }
+  },
+  HistoricalRiskScorePayload: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      unitName: { type: 'string', example: 'Financial Crime' },
+      classification: { type: 'string', nullable: true },
+      auditResponsibleUnit: { type: 'string', nullable: true },
+      operationalRiskScore: { type: 'number', nullable: true, example: 90 },
+      riskRating: { type: 'string', nullable: true, example: 'Very High' },
+      currentAuditScore: { type: 'number', nullable: true, example: 20 },
+      auditPeriod: { type: 'string', nullable: true, example: 'FY 2024 Q3' },
+      sourceYear: { type: 'integer', nullable: true, example: 2024 },
+      sourceQuarter: { type: 'string', nullable: true, example: 'Q3' },
+      batchId: { type: 'string', nullable: true },
+      originalFileName: { type: 'string', nullable: true },
+      notes: { type: 'string', nullable: true }
+    }
+  },
+  QaApmReviewDetail: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', example: 'APM-2026-001' },
+      planId: { type: 'string', format: 'uuid' },
+      submittedBy: { type: 'string', nullable: true },
+      submittedDate: { type: 'string', format: 'date-time', nullable: true },
+      team: { type: 'string', nullable: true },
+      auditTitle: { type: 'string', example: 'Financial Crime Review' },
+      auditClassification: { type: 'string', nullable: true, example: 'Compliance' },
+      duration: { type: 'integer', example: 30 },
+      unitBackground: { type: 'string', nullable: true },
+      objectives: { type: 'array', items: { type: 'string' } },
+      scopeOfReview: { type: 'string', nullable: true },
+      riskAnalysis: { type: 'string', nullable: true },
+      controlAnalysis: { type: 'string', nullable: true },
+      auditApproach: { type: 'string', nullable: true },
+      auditProcess: { type: 'array', items: { type: 'object' } },
+      testProcedures: { type: 'array', items: { type: 'object' } },
+      status: { type: 'string', enum: ['pending', 'approved', 'needs_revision', 'draft'] },
+      comments: { type: 'array', items: { type: 'object' } }
+    }
+  },
+  QaReportReviewRow: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      planNumber: { type: 'string', example: 'QA-REG-1775720548954-1' },
+      title: { type: 'string', example: 'Endpoint QA Approved Plan One 1775720548954' },
+      unitName: { type: 'string', example: 'Endpoint QA Narrow 1775720548954' },
+      workflowStatus: { type: 'string', example: 'approved' },
+      riskRating: { type: 'string', example: 'Medium' },
+      submittedToCaeAt: { type: 'string', format: 'date-time', nullable: true },
+      caeDecisionStatus: { type: 'string', enum: ['pending', 'approved', 'rejected'] },
+      caeDecisionAt: { type: 'string', format: 'date-time', nullable: true },
+      latestQaComment: { type: 'string', nullable: true }
+    }
+  },
+  QaSurveyDepartmentRow: {
+    type: 'object',
+    properties: {
+      department: { type: 'string', example: 'Financial Crime' },
+      planCount: { type: 'integer', example: 3 },
+      averageRiskScore: { type: 'number', example: 74.5 }
+    }
+  },
+  QaHistoryEvent: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', example: 'qa-plan-comment-1775720760816-82148' },
+      sourceType: { type: 'string', example: 'audit_plan' },
+      auditPlanId: { type: 'string', format: 'uuid', nullable: true },
+      riskAssessmentId: { type: 'string', format: 'uuid', nullable: true },
+      planNumber: { type: 'string', nullable: true },
+      title: { type: 'string', example: 'Endpoint QA Approved Plan One 1775720548954' },
+      unitName: { type: 'string', example: 'Endpoint QA Narrow 1775720548954' },
+      eventType: { type: 'string', example: 'qa_comment' },
+      description: { type: 'string', example: 'Focused QA regression comment.' },
+      timestamp: { type: 'string', format: 'date-time' },
+      actorName: { type: 'string', nullable: true }
+    }
+  },
+  CaeMasterPlanPlanRow: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      planNumber: { type: 'string', example: 'QA-REG-1775720548954-1' },
+      title: { type: 'string' },
+      unitName: { type: 'string' },
+      workflowStatus: { type: 'string' },
+      operationalRiskScore: { type: 'integer', example: 67 },
+      riskRating: { type: 'string', example: 'Medium' },
+      detailedRiskRating: { type: 'string', example: 'Medium' },
+      frequency: { type: 'string', example: 'Annual' },
+      plannedQuarters: { type: 'array', items: { type: 'string', example: 'Q2' } },
+      resources: { type: 'integer', example: 2 },
+      budget: { type: 'number', example: 4200 },
+      resourceHours: { type: 'integer', example: 100 },
+      submittedAt: { type: 'string', format: 'date-time', nullable: true },
+      submittedByName: { type: 'string', nullable: true },
+      decisionStatus: { type: 'string', enum: ['pending', 'approved', 'rejected', 'modification_requested'] },
+      decisionAt: { type: 'string', format: 'date-time', nullable: true }
+    }
+  },
+  CaeMasterPlanSubmission: {
+    type: 'object',
+    properties: {
+      submissionId: { type: 'string', example: 'CAE-1775720842561-984' },
+      submittedAt: { type: 'string', format: 'date-time', nullable: true },
+      submittedBy: { type: 'string', format: 'uuid', nullable: true },
+      submittedByName: { type: 'string', nullable: true, example: 'Endpoint QA Reviewer' },
+      notes: { type: 'string', nullable: true },
+      status: { type: 'string', enum: ['pending', 'approved', 'rejected', 'modification_requested'] },
+      decidedAt: { type: 'string', format: 'date-time', nullable: true },
+      planCount: { type: 'integer', example: 1 },
+      plans: { type: 'array', items: { $ref: '#/components/schemas/CaeMasterPlanPlanRow' } }
+    }
+  },
+  CaeApmSummaryRow: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      apmId: { type: 'string', example: 'CAE-APM-1775720548954-A' },
+      auditTitle: { type: 'string' },
+      unitName: { type: 'string' },
+      submittedBy: { type: 'string', nullable: true },
+      team: { type: 'string', nullable: true },
+      submittedDate: { type: 'string', format: 'date-time', nullable: true },
+      duration: { type: 'integer', example: 20 },
+      auditClassification: { type: 'string', nullable: true },
+      status: { type: 'string', enum: ['pending', 'approved', 'needs_revision', 'draft'] },
+      statusLabel: { type: 'string', example: 'Pending' },
+      latestReviewComment: { type: 'string', nullable: true }
+    }
+  },
+  CaeBoardSubmissionRow: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', format: 'uuid' },
+      planNumber: { type: 'string', example: 'ANNUAL-CAE-1775720548954' },
+      title: { type: 'string' },
+      year: { type: 'integer', example: 2026 },
+      status: { type: 'string', enum: ['cae_approved', 'board_pending', 'board_approved', 'board_rejected', 'published'] },
+      sectionCount: { type: 'integer', example: 1 },
+      rowCount: { type: 'integer', example: 2 },
+      totalAudits: { type: 'integer', example: 2 },
+      submittedToBoardAt: { type: 'string', format: 'date-time', nullable: true },
+      approvedAt: { type: 'string', format: 'date-time', nullable: true },
+      publishedAt: { type: 'string', format: 'date-time', nullable: true },
+      latestAction: { type: 'string', nullable: true },
+      latestActionAt: { type: 'string', format: 'date-time', nullable: true }
     }
   }
 });
@@ -3941,6 +4127,47 @@ Object.assign(swaggerDocument.paths, {
       security: [{ bearerAuth: [] }],
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
       responses: { '200': { description: 'Audit notification retrieved' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/audit/document-requests/bulk': {
+    post: {
+      summary: 'Create governance document requests for multiple auditees by email',
+      tags: ['Audit Operations'],
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['title', 'auditeeEmails'],
+              properties: {
+                title: { type: 'string' },
+                description: { type: 'string' },
+                category: { type: 'string' },
+                priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+                auditPlanId: { type: 'string', format: 'uuid' },
+                folderName: { type: 'string' },
+                folderKey: { type: 'string' },
+                dueDate: { type: 'string', format: 'date-time' },
+                auditeeEmails: { type: 'array', items: { type: 'string', format: 'email' } },
+                documentTitles: { type: 'array', items: { type: 'string' } },
+                auditees: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      email: { type: 'string', format: 'email' },
+                      documentTitles: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      responses: { '201': { description: 'Bulk document requests created' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
     }
   },
   '/api/audit/document-requests': {
@@ -4251,6 +4478,84 @@ Object.assign(swaggerDocument.paths, {
 });
 
 Object.assign(swaggerDocument.paths, {
+  '/api/team-lead/document-requests/preview': {
+    post: {
+      summary: 'Preview Team Lead governance document recipients before sending',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['title', 'auditeeEmails'],
+              properties: {
+                title: { type: 'string' },
+                auditPlanId: { type: 'string', format: 'uuid' },
+                folderName: { type: 'string' },
+                folderKey: { type: 'string' },
+                auditeeEmails: { type: 'array', items: { type: 'string', format: 'email' } },
+                documentTitles: { type: 'array', items: { type: 'string' } },
+                auditees: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      email: { type: 'string', format: 'email' },
+                      documentTitles: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      responses: { '200': { description: 'Team Lead recipient preview generated' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/document-requests/bulk': {
+    post: {
+      summary: 'Create governance document requests for multiple auditees from the Team Lead dashboard',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['title', 'auditeeEmails'],
+              properties: {
+                title: { type: 'string' },
+                description: { type: 'string' },
+                category: { type: 'string' },
+                priority: { type: 'string', enum: ['low', 'medium', 'high', 'critical'] },
+                auditPlanId: { type: 'string', format: 'uuid' },
+                folderName: { type: 'string' },
+                folderKey: { type: 'string' },
+                dueDate: { type: 'string', format: 'date-time' },
+                auditeeEmails: { type: 'array', items: { type: 'string', format: 'email' } },
+                documentTitles: { type: 'array', items: { type: 'string' } },
+                auditees: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      email: { type: 'string', format: 'email' },
+                      documentTitles: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      responses: { '201': { description: 'Team Lead bulk document requests created' }, '400': { $ref: '#/components/responses/BadRequest' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
   '/api/team-lead/dashboard': {
     get: {
       summary: 'Get Team Lead dashboard summary and approved plans',
@@ -4521,6 +4826,776 @@ Object.assign(swaggerDocument.paths, {
   '/api/annual-audit-plans/{id}/export/json': { get: { summary: 'Export annual audit plan JSON', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan JSON export ready' }, '404': { $ref: '#/components/responses/NotFound' } } } },
   '/api/annual-audit-plans/{id}/export/pdf': { get: { summary: 'Prepare annual audit plan PDF payload', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan PDF payload ready' }, '404': { $ref: '#/components/responses/NotFound' } } } },
   '/api/annual-audit-plans/{id}/export/docx': { get: { summary: 'Prepare annual audit plan DOCX payload', tags: ['Annual Audit Plans'], security: [{ bearerAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }], responses: { '200': { description: 'Plan DOCX payload ready' }, '404': { $ref: '#/components/responses/NotFound' } } } }
+});
+
+Object.assign(swaggerDocument.paths, {
+  '/api/qa/apm': {
+    get: {
+      summary: 'List QA APM review items',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string', enum: ['pending', 'approved', 'needs_revision', 'draft'] } },
+        { name: 'department', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: {
+        '200': {
+          description: 'QA APM review items retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: {
+                    type: 'object',
+                    properties: {
+                      rows: { type: 'array', items: { $ref: '#/components/schemas/QaApmReviewSummary' } },
+                      summary: { type: 'object' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        '401': { $ref: '#/components/responses/Unauthorized' },
+        '403': { $ref: '#/components/responses/Forbidden' }
+      }
+    }
+  },
+  '/api/qa/apm/{id}': {
+    get: {
+      summary: 'Get one QA APM review item',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        '200': {
+          description: 'QA APM review detail retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: { $ref: '#/components/schemas/QaApmReviewDetail' }
+                }
+              },
+              example: {
+                success: true,
+                data: {
+                  id: 'APM-2026-001',
+                  planId: '2d777c8f-8eaf-4875-bd60-3c96917bb45d',
+                  submittedBy: 'Endpoint QA Team Lead',
+                  submittedDate: '2026-04-09T07:50:31.000Z',
+                  team: 'Endpoint QA Team Lead',
+                  auditTitle: 'Financial Crime Review',
+                  auditClassification: 'Compliance',
+                  duration: 30,
+                  unitBackground: 'Seeded for focused QA regression checks.',
+                  objectives: ['Validate the QA APM workflow'],
+                  scopeOfReview: 'Scope seeded for QA regression tests.',
+                  riskAnalysis: 'Seeded risk analysis',
+                  controlAnalysis: 'Seeded control analysis',
+                  auditApproach: 'Seeded approach',
+                  auditProcess: [{ phase: 'Plan', detail: 'seeded workflow' }],
+                  testProcedures: [{ objective: 'Confirm QA endpoint behavior', procedure: 'Review seeded plan metadata and submission routing.', assignedTo: 'Endpoint QA' }],
+                  status: 'pending',
+                  comments: []
+                }
+              }
+            }
+          }
+        },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/qa/apm/{id}/approve': {
+    post: {
+      summary: 'Approve a QA APM review item',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: false,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                notes: { type: 'string', example: 'Approved after QA review.' }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        '200': { description: 'QA APM review approved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/qa/apm/{id}/reject': {
+    post: {
+      summary: 'Reject a QA APM review item',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['reason'],
+              properties: {
+                reason: { type: 'string', example: 'Need clearer procedures' },
+                notes: { type: 'string', nullable: true }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        '200': { description: 'QA APM review returned for revision' },
+        '400': { description: 'Invalid rejection reason' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/qa/audit-plans/{id}/review': {
+    get: {
+      summary: 'Get QA review history for one audit plan',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        '200': {
+          description: 'Audit plan QA review history retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: { $ref: '#/components/schemas/QaPlanReviewPayload' }
+                }
+              }
+            }
+          }
+        },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/qa/audit-plans/comments': {
+    post: {
+      summary: 'Save QA comments or recommendations for audit plans',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['planIds', 'comment'],
+              properties: {
+                planIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+                comment: { type: 'string', example: 'Please strengthen the resource assumptions.' },
+                recommendationType: { type: 'string', example: 'general' }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        '200': { description: 'QA comment saved' },
+        '400': { description: 'Missing plan IDs or comment' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/qa/audit-plans/request-modifications': {
+    post: {
+      summary: 'Request modifications for selected audit plans',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['planIds', 'comment'],
+              properties: {
+                planIds: { type: 'array', items: { type: 'string', format: 'uuid' } },
+                comment: { type: 'string', example: 'Please revise the audit scope and add supporting rationale.' }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        '200': { description: 'Modification request saved' },
+        '400': { description: 'Missing plan IDs or comment' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/qa/report-review': {
+    get: {
+      summary: 'Get QA report review data',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'department', in: 'query', schema: { type: 'string' } }],
+      responses: {
+        '200': {
+          description: 'QA report review data retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: {
+                    type: 'object',
+                    properties: {
+                      rows: { type: 'array', items: { $ref: '#/components/schemas/QaReportReviewRow' } },
+                      summary: { type: 'object' }
+                    }
+                  }
+                }
+              },
+              example: {
+                success: true,
+                data: {
+                  rows: [
+                    {
+                      id: '2d777c8f-8eaf-4875-bd60-3c96917bb45d',
+                      planNumber: 'QA-REG-1775720548954-1',
+                      title: 'Endpoint QA Approved Plan One 1775720548954',
+                      unitName: 'Endpoint QA Narrow 1775720548954',
+                      workflowStatus: 'approved',
+                      riskRating: 'Medium',
+                      submittedToCaeAt: '2026-04-09T07:47:22.000Z',
+                      caeDecisionStatus: 'approved',
+                      caeDecisionAt: '2026-04-09T07:47:29.000Z',
+                      latestQaComment: 'Focused QA regression comment.'
+                    }
+                  ],
+                  summary: { total: 1, pending: 0, approved: 1, rejected: 0 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  '/api/qa/survey-results': {
+    get: {
+      summary: 'Get synthesized QA survey-style analytics',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      responses: {
+        '200': {
+          description: 'QA survey analytics retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: {
+                    type: 'object',
+                    properties: {
+                      generatedFrom: { type: 'string' },
+                      summary: { type: 'object' },
+                      assessmentStatus: { type: 'object' },
+                      riskBandCounts: { type: 'object' },
+                      departmentRows: { type: 'array', items: { $ref: '#/components/schemas/QaSurveyDepartmentRow' } },
+                      insights: { type: 'array', items: { type: 'string' } }
+                    }
+                  }
+                }
+              },
+              example: {
+                success: true,
+                data: {
+                  generatedFrom: 'risk_assessments_and_audit_plans',
+                  summary: { totalAssessments: 4, totalPlans: 6, historicalScores: 2 },
+                  assessmentStatus: { pending: 2, completed: 2 },
+                  riskBandCounts: { Medium: 4, High: 2 },
+                  departmentRows: [
+                    { department: 'Endpoint QA Narrow 1775720548954', planCount: 6, averageRiskScore: 71.5 }
+                  ],
+                  insights: [
+                    '6 audit plan(s) are currently available for QA analytics.',
+                    '2 historical score row(s) are available for comparative planning.'
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  '/api/qa/history': {
+    get: {
+      summary: 'Get QA audit history timeline',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'department', in: 'query', schema: { type: 'string' } },
+        { name: 'limit', in: 'query', schema: { type: 'integer', example: 100 } }
+      ],
+      responses: {
+        '200': {
+          description: 'QA history retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: {
+                    type: 'object',
+                    properties: {
+                      rows: { type: 'array', items: { $ref: '#/components/schemas/QaHistoryEvent' } },
+                      summary: { type: 'object' }
+                    }
+                  }
+                }
+              },
+              example: {
+                success: true,
+                data: {
+                  rows: [
+                    {
+                      id: 'qa-plan-comment-1775720760816-82148',
+                      sourceType: 'audit_plan',
+                      auditPlanId: '2d777c8f-8eaf-4875-bd60-3c96917bb45d',
+                      planNumber: 'QA-REG-1775720548954-1',
+                      title: 'Endpoint QA Approved Plan One 1775720548954',
+                      unitName: 'Endpoint QA Narrow 1775720548954',
+                      eventType: 'qa_comment',
+                      description: 'Focused QA regression comment.',
+                      timestamp: '2026-04-09T07:46:00.816Z',
+                      actorName: 'Endpoint QA Reviewer'
+                    }
+                  ],
+                  summary: { totalEvents: 8, returned: 8, auditPlans: 5, riskAssessments: 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  '/api/qa/historical-scores': {
+    get: {
+      summary: 'List uploaded historical risk scores',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'sourceYear', in: 'query', schema: { type: 'integer', example: 2024 } },
+        { name: 'unitName', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: {
+        '200': {
+          description: 'Historical risk scores retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: {
+                    type: 'object',
+                    properties: {
+                      rows: { type: 'array', items: { $ref: '#/components/schemas/HistoricalRiskScorePayload' } },
+                      summary: { type: 'object' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  '/api/qa/historical-scores/template': {
+    get: {
+      summary: 'Download the historical risk score template',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      responses: {
+        '200': {
+          description: 'Historical score template file',
+          content: {
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': {
+              schema: { type: 'string', format: 'binary' }
+            }
+          }
+        }
+      }
+    }
+  },
+  '/api/qa/historical-scores/upload': {
+    post: {
+      summary: 'Upload historical risk scores',
+      tags: ['Quality Assurance'],
+      security: [{ bearerAuth: [] }],
+      requestBody: {
+        required: true,
+        content: {
+          'multipart/form-data': {
+            schema: {
+              type: 'object',
+              required: ['riskFile'],
+              properties: {
+                riskFile: {
+                  type: 'string',
+                  format: 'binary',
+                  description: 'CSV or Excel file containing historical score rows'
+                }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        '201': { description: 'Historical scores uploaded' },
+        '400': { description: 'No valid rows found in the upload' }
+      }
+    }
+  },
+  '/api/cae/master-plan/submissions': {
+    get: {
+      summary: 'List regular QA master-plan submissions for CAE review',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string', enum: ['pending', 'approved', 'rejected'] } },
+        { name: 'department', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: {
+        '200': {
+          description: 'CAE master-plan submissions retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  count: { type: 'integer', example: 1 },
+                  data: { type: 'array', items: { $ref: '#/components/schemas/CaeMasterPlanSubmission' } }
+                }
+              },
+              example: {
+                success: true,
+                count: 1,
+                data: [
+                  {
+                    submissionId: 'CAE-1775720842561-984',
+                    submittedAt: '2026-04-09T07:47:22.000Z',
+                    submittedBy: '8d6d1a7f-1eb4-4309-b94a-9858d4a0280d',
+                    submittedByName: 'Endpoint QA Reviewer',
+                    notes: 'Focused QA submission for approval path.',
+                    status: 'pending',
+                    decidedAt: null,
+                    planCount: 1,
+                    plans: [
+                      {
+                        id: '2d777c8f-8eaf-4875-bd60-3c96917bb45d',
+                        planNumber: 'QA-REG-1775720548954-1',
+                        title: 'Endpoint QA Approved Plan One 1775720548954',
+                        unitName: 'Endpoint QA Narrow 1775720548954',
+                        workflowStatus: 'approved',
+                        budget: 4200,
+                        resourceHours: 100,
+                        submittedAt: '2026-04-09T07:47:22.000Z',
+                        submittedByName: 'Endpoint QA Reviewer',
+                        decisionStatus: 'pending',
+                        decisionAt: null
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  '/api/cae/master-plan/submissions/{submissionId}': {
+    get: {
+      summary: 'Get one regular QA master-plan submission package',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'submissionId', in: 'path', required: true, schema: { type: 'string' } }],
+      responses: {
+        '200': {
+          description: 'CAE master-plan submission retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: { $ref: '#/components/schemas/CaeMasterPlanSubmission' }
+                }
+              }
+            }
+          }
+        },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/master-plan/submissions/{submissionId}/approve': {
+    post: {
+      summary: 'Approve a regular QA master-plan submission package',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'submissionId', in: 'path', required: true, schema: { type: 'string' } }],
+      requestBody: {
+        required: false,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                notes: { type: 'string', example: 'Approved for implementation.' }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        '200': { description: 'Master-plan submission approved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/master-plan/submissions/{submissionId}/reject': {
+    post: {
+      summary: 'Reject a regular QA master-plan submission package',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'submissionId', in: 'path', required: true, schema: { type: 'string' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              required: ['reason'],
+              properties: {
+                reason: { type: 'string', example: 'Needs stronger supporting narrative' },
+                notes: { type: 'string', nullable: true }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        '200': { description: 'Master-plan submission rejected' },
+        '400': { description: 'Invalid rejection reason' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/dashboard': {
+    get: {
+      summary: 'Get CAE dashboard overview',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      responses: {
+        '200': {
+          description: 'CAE dashboard data retrieved'
+        }
+      }
+    }
+  },
+  '/api/cae/apm': {
+    get: {
+      summary: 'Get CAE APM approval queue',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string', enum: ['pending', 'approved', 'needs_revision', 'draft'] } },
+        { name: 'department', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: {
+        '200': {
+          description: 'CAE APM approval queue retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: {
+                    type: 'object',
+                    properties: {
+                      rows: { type: 'array', items: { $ref: '#/components/schemas/CaeApmSummaryRow' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  '/api/cae/apm/{id}': {
+    get: {
+      summary: 'Get one CAE APM approval detail',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        '200': { description: 'CAE APM detail retrieved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/apm/{id}/approve': {
+    post: {
+      summary: 'Approve a CAE APM submission',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        '200': { description: 'CAE APM submission approved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/apm/{id}/reject': {
+    post: {
+      summary: 'Return a CAE APM submission for revision',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        '200': { description: 'CAE APM submission returned for changes' },
+        '400': { description: 'Invalid rejection reason' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/report-review': {
+    get: {
+      summary: 'Get CAE report-review overview',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      responses: {
+        '200': { description: 'CAE report-review data retrieved' }
+      }
+    }
+  },
+  '/api/cae/board-submissions': {
+    get: {
+      summary: 'Get CAE board-submission list',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string', enum: ['cae_approved', 'board_pending', 'board_approved', 'board_rejected', 'published'] } },
+        { name: 'year', in: 'query', schema: { type: 'integer' } }
+      ],
+      responses: {
+        '200': {
+          description: 'CAE board submissions retrieved',
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  success: { type: 'boolean', example: true },
+                  data: {
+                    type: 'object',
+                    properties: {
+                      rows: { type: 'array', items: { $ref: '#/components/schemas/CaeBoardSubmissionRow' } }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  '/api/cae/board-submissions/{id}': {
+    get: {
+      summary: 'Get one CAE board-submission detail',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        '200': { description: 'CAE board submission detail retrieved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/history': {
+    get: {
+      summary: 'Get CAE history timeline',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'limit', in: 'query', schema: { type: 'integer', example: 100 } }],
+      responses: {
+        '200': { description: 'CAE history retrieved' }
+      }
+    }
+  },
+  '/api/cae/master-plan/submissions/{submissionId}/request-modification': {
+    post: {
+      summary: 'Request modifications on a regular QA master-plan submission package',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'submissionId', in: 'path', required: true, schema: { type: 'string' } }],
+      responses: {
+        '200': { description: 'Modification request recorded' },
+        '400': { description: 'Invalid modification comment' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/master-plan/{submissionId}': {
+    get: {
+      summary: 'Get frontend-aligned CAE master-plan review payload',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'submissionId', in: 'path', required: true, schema: { type: 'string' } }],
+      responses: {
+        '200': { description: 'CAE master-plan review payload retrieved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/cae/master-plan/{submissionId}/export/board-ready': {
+    get: {
+      summary: 'Get board-ready export payload for a CAE master-plan submission',
+      tags: ['Chief Audit Executive'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'submissionId', in: 'path', required: true, schema: { type: 'string' } }],
+      responses: {
+        '200': { description: 'Board-ready export payload retrieved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  }
 });
 
 const swaggerOptions = {

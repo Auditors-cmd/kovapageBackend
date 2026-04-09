@@ -9,6 +9,7 @@ const Notification = require('../models/Notification');
 const AuditNotification = require('../models/AuditNotification');
 const AutoScheduleSubmission = require('../models/AutoScheduleSubmission');
 const AnnualAuditPlan = require('../models/AnnualAuditPlan');
+const HistoricalRiskScore = require('../models/HistoricalRiskScore');
 
 const endpointEmailPattern = 'endpoint-%@example.com';
 const endpointResetPattern = 'endpoint-reset-%@example.com';
@@ -111,6 +112,16 @@ const run = async () => {
           { title: { [Op.like]: endpointTitlePrefix } },
           { department: { [Op.like]: endpointDepartmentPrefix } },
           userIds.length > 0 ? { createdBy: { [Op.in]: userIds } } : null
+        ].filter(Boolean)
+      }
+    });
+
+    await HistoricalRiskScore.destroy({
+      where: {
+        [Op.or]: [
+          { originalFileName: { [Op.like]: 'historical-risk-scores%' } },
+          userIds.length > 0 ? { createdBy: { [Op.in]: userIds } } : null,
+          userIds.length > 0 ? { updatedBy: { [Op.in]: userIds } } : null
         ].filter(Boolean)
       }
     });

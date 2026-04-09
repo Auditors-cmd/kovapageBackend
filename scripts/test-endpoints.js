@@ -354,8 +354,11 @@ const main = async () => {
   let auditeeToken;
   let seeded;
   let createdApmId;
+  let rejectedApmId;
   let firstSubmissionId;
   let secondSubmissionId;
+  let regularApprovedSubmissionId;
+  let regularRejectedSubmissionId;
   let tempAssignUserId;
   let tempDeactivateUserId;
   let documentRequestId;
@@ -364,6 +367,8 @@ const main = async () => {
   let annualAuditPlanId;
   let teamLeadPlanningProcedureId;
   let teamMemberProcedureId;
+  let teamMemberAssignmentId;
+  let addedProcedureId;
 
   await runCheck('GET /', async () => {
     const response = await request('GET', '/');
@@ -568,6 +573,115 @@ const main = async () => {
     return response.body?.message;
   });
   seeded = await seedDomainData({ qaUser, unitHeadUser, teamLeadUser, teamMemberUser });
+
+  await runCheck('GET /api/qa/dashboard', async () => {
+    const response = await request('GET', '/api/qa/dashboard', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/dashboard');
+    if (!response.body?.data?.riskAssessment || !response.body?.data?.auditPlans) {
+      throw new Error('Expected QA dashboard riskAssessment and auditPlans payload');
+    }
+    return 'toReview=' + (response.body?.data?.auditPlans?.toReview || 0);
+  });
+
+  await runCheck('GET /api/qa/dashboard-data', async () => {
+    const response = await request('GET', '/api/qa/dashboard-data', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/dashboard-data');
+    if (!Array.isArray(response.body?.data?.keyInsights) || response.body.data.keyInsights.length === 0) {
+      throw new Error('Expected generated keyInsights on enhanced QA dashboard payload');
+    }
+    return 'insights=' + response.body.data.keyInsights.length;
+  });
+
+  await runCheck('GET /api/qa/audit-plans', async () => {
+    const response = await request('GET', '/api/qa/audit-plans', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/audit-plans');
+    const found = Array.isArray(response.body?.data) && response.body.data.some((plan) => plan.id === seeded.approvedPlanOne.id);
+    if (!found) throw new Error('Expected seeded approved plan in QA audit plans list');
+    if (!response.body?.planDashboard?.consolidatedAuditPlan || !Array.isArray(response.body?.planDashboard?.quarterlyDistribution)) {
+      throw new Error('Expected planDashboard consolidated audit plan and quarterly distribution payload');
+    }
+    return 'total=' + response.body?.summary?.total;
+  });
+
+  await runCheck('POST /api/qa/audit-plans/comments', async () => {
+    const response = await request('POST', '/api/qa/audit-plans/comments', {
+      token: qaToken,
+      body: {
+        planIds: [seeded.approvedPlanOne.id],
+        comment: 'QA notes captured during endpoint smoke coverage.',
+        recommendationType: 'review'
+      }
+    });
+    expectStatus(response, [200], 'POST /api/qa/audit-plans/comments');
+    return response.body?.data?.commentId;
+  });
+
+  await runCheck('GET /api/qa/audit-plans/:id/review after comment', async () => {
+    const response = await request('GET', `/api/qa/audit-plans/${seeded.approvedPlanOne.id}/review`, { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/audit-plans/:id/review after comment');
+    if (!response.body?.data?.latestComment?.comment) {
+      throw new Error('Expected latest QA comment in audit plan review payload');
+    }
+    return response.body?.data?.qaReviewStatus || 'commented';
+  });
+
+  await runCheck('POST /api/qa/audit-plans/request-modifications', async () => {
+    const response = await request('POST', '/api/qa/audit-plans/request-modifications', {
+      token: qaToken,
+      body: {
+        planIds: [seeded.draftPlan.id],
+        comment: 'Please update the audit scope and supporting rationale before QA proceeds.'
+      }
+    });
+    expectStatus(response, [200], 'POST /api/qa/audit-plans/request-modifications');
+    return response.body?.data?.requestedAt;
+  });
+
+  await runCheck('GET /api/qa/audit-plans/:id/review after modification request', async () => {
+    const response = await request('GET', `/api/qa/audit-plans/${seeded.draftPlan.id}/review`, { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/audit-plans/:id/review after modification request');
+    if (response.body?.data?.qaReviewStatus !== 'modification_requested') {
+      throw new Error('Expected modification_requested review status after QA request');
+    }
+    return response.body?.data?.latestModificationRequest?.id;
+  });
+
+  await runCheck('GET /api/qa/historical-scores/template', async () => {
+    const response = await request('GET', '/api/qa/historical-scores/template', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/historical-scores/template');
+    if ((response.body?.byteLength || 0) < 100) {
+      throw new Error('Expected historical score template binary response');
+    }
+    return response.body?.contentType;
+  });
+
+  await runCheck('POST /api/qa/historical-scores/upload', async () => {
+    const form = new FormData();
+    const csv = [
+      'Unit Name,Classification,Audit Responsible Unit,Operational Risk Score,Risk Rating,Current Audit Score,Audit Period,Source Year,Notes',
+      'Financial Crime,ERG,Internal Audit - Risk,90,Very High,20,FY 2024 Q3,2024,Seeded during smoke test'
+    ].join('\n');
+    form.append('riskFile', new Blob([csv], { type: 'text/csv' }), 'historical-risk-scores.csv');
+
+    const response = await request('POST', '/api/qa/historical-scores/upload', {
+      token: qaToken,
+      body: form
+    });
+    expectStatus(response, [201], 'POST /api/qa/historical-scores/upload');
+    if ((response.body?.data?.rowCount || 0) < 1) {
+      throw new Error('Expected at least one imported historical score row');
+    }
+    return 'rows=' + response.body?.data?.rowCount;
+  });
+
+  await runCheck('GET /api/qa/historical-scores', async () => {
+    const response = await request('GET', '/api/qa/historical-scores?sourceYear=2024', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/historical-scores');
+    if ((response.body?.data?.summary?.total || 0) < 1) {
+      throw new Error('Expected uploaded historical score rows to be listed');
+    }
+    return 'total=' + response.body?.data?.summary?.total;
+  });
 
   await runCheck('POST /api/audit/audit-notifications', async () => {
     const response = await request('POST', '/api/audit/audit-notifications', {
@@ -906,6 +1020,111 @@ const main = async () => {
     }
     return response.body?.data?.workspace?.approval?.status;
   });
+
+  await runCheck('Create secondary QA APM review candidate', async () => {
+    const rejectedPlan = await AuditPlan.create({
+      planNumber: `EP-APM-${runStamp}-R`,
+      title: `Endpoint APM Reject Plan ${runStamp}`,
+      description: 'Seeded QA APM rejection candidate',
+      status: 'approved',
+      department,
+      auditPeriod: 'Q3 2026',
+      riskAssessmentId: seeded.riskAssessment.id,
+      teamLeadId: teamLeadUser.id,
+      teamMemberIds: [teamMemberUser.id],
+      budget: 6800,
+      resourceHours: 140,
+      auditAreas: ['Area Reject'],
+      createdBy: unitHeadUser.id,
+      approvedBy: unitHeadUser.id,
+      approvedAt: new Date(),
+      metadata: {
+        teamLeadPlanning: {
+          basicInformation: {
+            auditTitle: 'Endpoint Reject Candidate',
+            auditClassification: 'Operational',
+            durationDays: 30
+          },
+          unitBackgroundDescription: 'Secondary candidate for QA rejection path.',
+          objectives: [{ text: 'Validate QA rejection workflow' }],
+          scopeOfReview: 'Seeded scope',
+          raca: {
+            riskAnalysis: 'Seeded risk analysis',
+            controlAnalysis: 'Seeded control analysis'
+          },
+          auditApproach: 'Seeded approach',
+          auditProcess: 'Plan: prepare evidence',
+          testProcedures: [
+            {
+              testObjective: 'Confirm workflow rejection handling',
+              testProcedure: 'Review seeded metadata and QA routing.'
+            }
+          ],
+          approval: {
+            targetRole: 'quality_assurance',
+            status: 'pending',
+            submittedAt: new Date().toISOString(),
+            submittedBy: teamLeadUser.id,
+            submittedByName: teamLeadUser.name
+          },
+          status: 'submitted_for_approval'
+        }
+      }
+    });
+
+    rejectedApmId = rejectedPlan.id;
+    return rejectedPlan.id;
+  });
+
+  await runCheck('GET /api/qa/apm', async () => {
+    const response = await request('GET', '/api/qa/apm', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/apm');
+    const rows = response.body?.data?.rows || [];
+    createdApmId = rows.find((row) => row.id === seeded.approvedPlanTwo.id)?.id || null;
+    if (!createdApmId) {
+      throw new Error('Expected submitted team lead workspace to appear in QA APM list');
+    }
+    if (!rows.some((row) => row.id === rejectedApmId)) {
+      throw new Error('Expected secondary QA APM candidate in QA APM list');
+    }
+    return 'count=' + rows.length;
+  });
+
+  await runCheck('GET /api/qa/apm/:id', async () => {
+    const response = await request('GET', `/api/qa/apm/${createdApmId}`, { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/apm/:id');
+    if (!response.body?.data?.auditTitle || !Array.isArray(response.body?.data?.testProcedures)) {
+      throw new Error('Expected detailed QA APM payload');
+    }
+    return response.body?.data?.auditTitle;
+  });
+
+  await runCheck('POST /api/qa/apm/:id/approve', async () => {
+    const response = await request('POST', `/api/qa/apm/${createdApmId}/approve`, {
+      token: qaToken,
+      body: { notes: 'Approved during endpoint smoke coverage.' }
+    });
+    expectStatus(response, [200], 'POST /api/qa/apm/:id/approve');
+    if (response.body?.data?.status !== 'approved') {
+      throw new Error('Expected approved QA APM response status');
+    }
+    return response.body?.data?.reviewedBy;
+  });
+
+  await runCheck('POST /api/qa/apm/:id/reject', async () => {
+    const response = await request('POST', `/api/qa/apm/${rejectedApmId}/reject`, {
+      token: qaToken,
+      body: {
+        reason: 'Need clearer test procedures',
+        notes: 'Returning this plan for refinement during smoke testing.'
+      }
+    });
+    expectStatus(response, [200], 'POST /api/qa/apm/:id/reject');
+    if (response.body?.data?.status !== 'needs_revision') {
+      throw new Error('Expected needs_revision QA APM response status');
+    }
+    return response.body?.data?.reviewedBy;
+  });
   await runCheck('GET /api/audit/dashboard', async () => {
     const response = await request('GET', '/api/audit/dashboard', { token: teamMemberToken });
     expectStatus(response, [200], 'GET /api/audit/dashboard');
@@ -1028,6 +1247,125 @@ const main = async () => {
     const response = await request('GET', '/api/unit-head/dashboard-data', { token: unitHeadToken });
     expectStatus(response, [200], 'GET /api/unit-head/dashboard-data');
     return 'unit head dashboard ok';
+  });
+
+  await runCheck('POST /api/qa/submit-to-cae (approve path)', async () => {
+    const response = await request('POST', '/api/qa/submit-to-cae', {
+      token: qaToken,
+      body: {
+        planIds: [seeded.approvedPlanOne.id],
+        notes: 'Submitting regular master-plan package for approval path.',
+        status: 'approved',
+        department
+      }
+    });
+    expectStatus(response, [200], 'POST /api/qa/submit-to-cae approve path');
+    regularApprovedSubmissionId = response.body?.data?.submissionId;
+    return regularApprovedSubmissionId;
+  });
+
+  await runCheck('GET /api/cae/master-plan/submissions', async () => {
+    const response = await request('GET', '/api/cae/master-plan/submissions', { token: caeToken });
+    expectStatus(response, [200], 'GET /api/cae/master-plan/submissions');
+    const found = Array.isArray(response.body?.data) && response.body.data.some((item) => item.submissionId === regularApprovedSubmissionId);
+    if (!found) {
+      throw new Error('Expected regular master-plan submission in CAE submission list');
+    }
+    return 'count=' + response.body?.count;
+  });
+
+  await runCheck('GET /api/cae/master-plan/submissions/:submissionId', async () => {
+    const response = await request('GET', `/api/cae/master-plan/submissions/${regularApprovedSubmissionId}`, { token: caeToken });
+    expectStatus(response, [200], 'GET /api/cae/master-plan/submissions/:submissionId');
+    if (response.body?.data?.submissionId !== regularApprovedSubmissionId) {
+      throw new Error('Expected CAE master-plan submission detail payload');
+    }
+    return response.body?.data?.submissionId;
+  });
+
+  await runCheck('POST /api/cae/master-plan/submissions/:submissionId/approve', async () => {
+    const response = await request('POST', `/api/cae/master-plan/submissions/${regularApprovedSubmissionId}/approve`, {
+      token: caeToken,
+      body: { notes: 'Approved regular master-plan package during smoke testing.' }
+    });
+    expectStatus(response, [200], 'POST /api/cae/master-plan/submissions/:submissionId/approve');
+    if (response.body?.data?.status !== 'approved') {
+      throw new Error('Expected approved status from CAE master-plan approval');
+    }
+    return response.body?.data?.submissionId;
+  });
+
+  await runCheck('POST /api/qa/submit-to-cae (reject path)', async () => {
+    const response = await request('POST', '/api/qa/submit-to-cae', {
+      token: qaToken,
+      body: {
+        planIds: [seeded.approvedPlanTwo.id],
+        notes: 'Submitting regular master-plan package for rejection path.',
+        status: 'approved',
+        department
+      }
+    });
+    expectStatus(response, [200], 'POST /api/qa/submit-to-cae reject path');
+    regularRejectedSubmissionId = response.body?.data?.submissionId;
+    return regularRejectedSubmissionId;
+  });
+
+  await runCheck('POST /api/cae/master-plan/submissions/:submissionId/reject', async () => {
+    const response = await request('POST', `/api/cae/master-plan/submissions/${regularRejectedSubmissionId}/reject`, {
+      token: caeToken,
+      body: {
+        reason: 'Needs stronger supporting narrative',
+        notes: 'Rejected regular master-plan package during smoke testing.'
+      }
+    });
+    expectStatus(response, [200], 'POST /api/cae/master-plan/submissions/:submissionId/reject');
+    if (response.body?.data?.status !== 'rejected') {
+      throw new Error('Expected rejected status from CAE master-plan rejection');
+    }
+    return response.body?.data?.submissionId;
+  });
+
+  await runCheck('GET /api/qa/report-review', async () => {
+    const response = await request('GET', '/api/qa/report-review', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/report-review');
+    if ((response.body?.data?.summary?.total || 0) < 1) {
+      throw new Error('Expected QA report review rows after CAE submissions');
+    }
+    return 'total=' + response.body?.data?.summary?.total;
+  });
+
+  await runCheck('GET /api/qa/survey-results', async () => {
+    const response = await request('GET', '/api/qa/survey-results', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/survey-results');
+    if ((response.body?.data?.summary?.historicalScores || 0) < 1) {
+      throw new Error('Expected historical score totals in survey results after upload');
+    }
+    return 'plans=' + response.body?.data?.summary?.totalPlans;
+  });
+
+  await runCheck('GET /api/qa/history', async () => {
+    const response = await request('GET', '/api/qa/history', { token: qaToken });
+    expectStatus(response, [200], 'GET /api/qa/history');
+    const rows = response.body?.data?.rows || [];
+    if (!rows.some((row) => row.eventType === 'qa_comment' || row.eventType === 'cae_approved' || row.eventType === 'cae_rejected')) {
+      throw new Error('Expected QA history timeline to include review or CAE events');
+    }
+    return 'returned=' + response.body?.data?.summary?.returned;
+  });
+
+  await runCheck('POST /api/qa/auto-schedule/submit-to-cae (approve path)', async () => {
+    const response = await request('POST', '/api/qa/auto-schedule/submit-to-cae', {
+      token: qaToken,
+      body: {
+        sourcePlanIds: [seeded.approvedPlanOne.id],
+        targetYear: new Date().getFullYear() + 1,
+        notes: 'Endpoint smoke submission approval path',
+        department
+      }
+    });
+    expectStatus(response, [201], 'POST /api/qa/auto-schedule/submit-to-cae first');
+    firstSubmissionId = response.body?.data?.submissionId;
+    return firstSubmissionId;
   });
 
   await runCheck('GET /api/cae/auto-schedule/submissions', async () => {
