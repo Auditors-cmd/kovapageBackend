@@ -12,6 +12,8 @@
     "check:coverage": "node scripts/compare-docs.js",
     "test:qa": "node scripts/test-qa-routes.js",
     "test:cae": "node scripts/test-cae-routes.js",
+    "test:bac": "node scripts/test-bac-routes.js",
+    "test:teamlead": "node scripts/test-teamlead-routes.js",
     "test:endpoints": "node scripts/test-endpoints.js",
     "cleanup:endpoints": "node scripts/cleanup-endpoint-test-data.js"
   },

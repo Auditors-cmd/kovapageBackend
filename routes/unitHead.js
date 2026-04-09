@@ -70,6 +70,41 @@ const appendApmHistory = (apmMeta, entry) => {
   return [...history, entry];
 };
 
+const appendPlanningHistory = (planningMeta, entry) => {
+  const history = Array.isArray(planningMeta?.workflowHistory) ? planningMeta.workflowHistory : [];
+  return [...history, entry];
+};
+
+const createWorkflowEntryId = (prefix) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 1000000)}`;
+
+const getPlanningApprovalStatusLabel = (status) => {
+  if (status === 'approved') return 'Approved';
+  if (status === 'rejected') return 'Rejected';
+  if (status === 'pending') return 'Pending Review';
+  return 'Draft';
+};
+
+const findRoleRecipients = async ({ role, department, excludeUserId = null }) => {
+  const where = {
+    role,
+    isActive: true
+  };
+
+  if (excludeUserId) {
+    where.id = { [Op.ne]: excludeUserId };
+  }
+
+  if (department && ['unit_head', 'quality_assurance'].includes(role)) {
+    where[Op.or] = [{ department }, { department: null }];
+  }
+
+  return User.findAll({
+    where,
+    attributes: ['id', 'name', 'email', 'role', 'department'],
+    order: [['name', 'ASC']]
+  });
+};
+
 const getCurrentQuarterLabel = () => {
   const now = new Date();
   const quarter = getQuarterFromDate(now) || 'Q1';
@@ -677,6 +712,7 @@ router.post('/apm/:id/approve', async (req, res) => {
     }
 
     const approvalTimestamp = new Date();
+    const approvalTimestampIso = approvalTimestamp.toISOString();
     const approvalEntry = {
       action: 'approved',
       actorId: req.user.id,
@@ -686,35 +722,107 @@ router.post('/apm/:id/approve', async (req, res) => {
       fromStatus: currentStatus,
       toStatus: 'approved'
     };
+    const currentPlanning = apm.metadata?.teamLeadPlanning || null;
+    const nextMetadata = {
+      ...(apm.metadata || {}),
+      apm: {
+        ...currentApmMeta,
+        apmStatus: 'approved',
+        submitted: true,
+        submittedAt: currentApmMeta.submittedAt || approvalTimestamp,
+        submittedBy: currentApmMeta.submittedBy || req.user.id,
+        submittedByName: currentApmMeta.submittedByName || req.user.name,
+        reviewedAt: approvalTimestamp,
+        reviewedBy: req.user.id,
+        reviewedByName: req.user.name,
+        reviewNotes: notes || null,
+        qaSubmission: {
+          submittedToQa: true,
+          target: 'quality_assurance',
+          purpose: 'consolidation',
+          submittedAt: approvalTimestamp,
+          submittedBy: req.user.id,
+          submittedByName: req.user.name,
+          notes: notes || null
+        },
+        reviewHistory: appendApmHistory(currentApmMeta, approvalEntry)
+      }
+    };
+
+    if (currentPlanning) {
+      nextMetadata.teamLeadPlanning = {
+        ...currentPlanning,
+        status: 'submitted_for_approval',
+        approval: {
+          ...(currentPlanning.approval || {}),
+          targetRole: 'quality_assurance',
+          status: 'pending',
+          statusLabel: getPlanningApprovalStatusLabel('pending'),
+          submittedAt: approvalTimestampIso,
+          reviewedAt: approvalTimestampIso,
+          reviewedBy: req.user.id,
+          reviewedByName: req.user.name,
+          reviewComments: notes || null,
+          previousTargetRole: currentPlanning?.approval?.targetRole || 'unit_head'
+        },
+        workflowHistory: appendPlanningHistory(currentPlanning, {
+          id: createWorkflowEntryId('team-lead-unit-head-approval'),
+          type: 'unit_head_approved',
+          at: approvalTimestampIso,
+          actorId: req.user.id,
+          actorName: req.user.name,
+          actorRole: req.user.role,
+          notes: notes || null,
+          nextTargetRole: 'quality_assurance'
+        })
+      };
+    }
 
     await apm.update({
       status: 'approved',
-      metadata: {
-        ...(apm.metadata || {}),
-        apm: {
-          ...currentApmMeta,
-          apmStatus: 'approved',
-          submitted: true,
-          submittedAt: currentApmMeta.submittedAt || approvalTimestamp,
-          submittedBy: currentApmMeta.submittedBy || req.user.id,
-          submittedByName: currentApmMeta.submittedByName || req.user.name,
-          reviewedAt: approvalTimestamp,
-          reviewedBy: req.user.id,
-          reviewedByName: req.user.name,
-          reviewNotes: notes || null,
-          qaSubmission: {
-            submittedToQa: true,
-            target: 'quality_assurance',
-            purpose: 'consolidation',
-            submittedAt: approvalTimestamp,
-            submittedBy: req.user.id,
-            submittedByName: req.user.name,
-            notes: notes || null
-          },
-          reviewHistory: appendApmHistory(currentApmMeta, approvalEntry)
-        }
-      }
+      metadata: nextMetadata
     });
+
+    const qaRecipients = await findRoleRecipients({
+      role: 'quality_assurance',
+      department: apm.department,
+      excludeUserId: req.user.id
+    });
+
+    for (const recipient of qaRecipients) {
+      await Notification.create({
+        userId: recipient.id,
+        type: 'approval',
+        title: `APM submitted to QA (${apm.planNumber})`,
+        message: `${req.user.name} approved ${apm.title} and forwarded it to QA for review.`,
+        auditPlanId: apm.id,
+        status: 'unread',
+        metadata: {
+          auditPlanId: apm.id,
+          unitHeadReviewStatus: 'approved',
+          forwardedTo: 'quality_assurance',
+          reviewedAt: approvalTimestampIso
+        }
+      });
+    }
+
+    const notifyUserIds = Array.from(new Set([apm.teamLeadId, apm.createdBy].filter((id) => id && id !== req.user.id)));
+    for (const userId of notifyUserIds) {
+      await Notification.create({
+        userId,
+        type: 'approval',
+        title: `Unit Head approved APM (${apm.planNumber})`,
+        message: `${req.user.name} approved ${apm.title} and moved it to QA review.`,
+        auditPlanId: apm.id,
+        status: 'unread',
+        metadata: {
+          auditPlanId: apm.id,
+          unitHeadReviewStatus: 'approved',
+          forwardedTo: 'quality_assurance',
+          reviewedAt: approvalTimestampIso
+        }
+      });
+    }
 
     res.json({
       success: true,
@@ -760,6 +868,7 @@ router.post('/apm/:id/reject', async (req, res) => {
     }
 
     const currentApmMeta = apm.metadata?.apm || {};
+    const currentPlanning = apm.metadata?.teamLeadPlanning || null;
     if (currentApmMeta.apmStatus !== 'pending_approval') {
       return res.status(400).json({
         success: false,
@@ -775,24 +884,71 @@ router.post('/apm/:id/reject', async (req, res) => {
       reason: reason.toString().trim(),
       notes: notes || null
     };
+    const reviewedAt = new Date();
+    const reviewedAtIso = reviewedAt.toISOString();
+    const nextMetadata = {
+      ...(apm.metadata || {}),
+      apm: {
+        ...currentApmMeta,
+        apmStatus: 'rejected',
+        submitted: false,
+        reviewedAt,
+        reviewedBy: req.user.id,
+        reviewedByName: req.user.name,
+        rejectionReason: reason.toString().trim(),
+        reviewNotes: notes || null,
+        reviewHistory: appendApmHistory(currentApmMeta, rejectionEntry)
+      }
+    };
+
+    if (currentPlanning) {
+      nextMetadata.teamLeadPlanning = {
+        ...currentPlanning,
+        status: 'rejected',
+        approval: {
+          ...(currentPlanning.approval || {}),
+          targetRole: currentPlanning?.approval?.targetRole || 'unit_head',
+          status: 'rejected',
+          statusLabel: getPlanningApprovalStatusLabel('rejected'),
+          reviewedAt: reviewedAtIso,
+          reviewedBy: req.user.id,
+          reviewedByName: req.user.name,
+          reviewComments: notes || reason.toString().trim()
+        },
+        workflowHistory: appendPlanningHistory(currentPlanning, {
+          id: createWorkflowEntryId('team-lead-unit-head-rejection'),
+          type: 'unit_head_rejected',
+          at: reviewedAtIso,
+          actorId: req.user.id,
+          actorName: req.user.name,
+          actorRole: req.user.role,
+          notes: notes || reason.toString().trim()
+        })
+      };
+    }
 
     await apm.update({
       status: 'draft',
-      metadata: {
-        ...(apm.metadata || {}),
-        apm: {
-          ...currentApmMeta,
-          apmStatus: 'rejected',
-          submitted: false,
-          reviewedAt: new Date(),
-          reviewedBy: req.user.id,
-          reviewedByName: req.user.name,
-          rejectionReason: reason.toString().trim(),
-          reviewNotes: notes || null,
-          reviewHistory: appendApmHistory(currentApmMeta, rejectionEntry)
-        }
-      }
+      metadata: nextMetadata
     });
+
+    const notifyUserIds = Array.from(new Set([apm.teamLeadId, apm.createdBy].filter((id) => id && id !== req.user.id)));
+    for (const userId of notifyUserIds) {
+      await Notification.create({
+        userId,
+        type: 'approval',
+        title: `Unit Head returned APM (${apm.planNumber})`,
+        message: `${req.user.name} returned ${apm.title} for updates. Reason: ${reason.toString().trim()}.`,
+        auditPlanId: apm.id,
+        status: 'unread',
+        metadata: {
+          auditPlanId: apm.id,
+          unitHeadReviewStatus: 'rejected',
+          reviewedAt: reviewedAtIso,
+          reason: reason.toString().trim()
+        }
+      });
+    }
 
     res.json({
       success: true,

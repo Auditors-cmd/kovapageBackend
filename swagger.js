@@ -100,6 +100,10 @@ Complete audit management system with 8 specialized user roles, OTP and password
       description: 'Unit head dashboard metrics, actions, and performance trends'
     },
     {
+      name: 'BAC/Secretariat',
+      description: 'Board approval dashboard and BAC workflow endpoints'
+    },
+    {
       name: 'Admin',
       description: 'Administrative endpoints for user management'
     },
@@ -4577,6 +4581,19 @@ Object.assign(swaggerDocument.paths, {
       responses: { '200': { description: 'Team Lead assignments retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
     }
   },
+  '/api/team-lead/assigned-tasks': {
+    get: {
+      summary: 'List Team Lead assignment cards for the My Audit Assignments screen',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string', enum: ['All', 'Pending', 'In Progress', 'Completed'] } },
+        { name: 'role', in: 'query', schema: { type: 'string', enum: ['all', 'team_lead', 'team_member'] } },
+        { name: 'search', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Team Lead assigned-task cards retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
+    }
+  },
   '/api/team-lead/assignments/{id}/commence': {
     post: {
       summary: 'Commence one Team Lead audit assignment',
@@ -4674,11 +4691,25 @@ Object.assign(swaggerDocument.paths, {
   },
   '/api/team-lead/assignments/{id}/workspace/submit': {
     post: {
-      summary: 'Submit Team Lead planning workspace for approval',
+      summary: 'Submit Team Lead planning workspace for approval, defaulting to Unit Head review first',
       tags: ['Team Lead'],
       security: [{ bearerAuth: [] }],
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
       responses: { '200': { description: 'Planning workspace submitted for approval' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
+    }
+  },
+  '/api/team-lead/approved-plan-data': {
+    get: {
+      summary: 'Get Team Lead approved-plan chart and table data for the overview page',
+      tags: ['Team Lead'],
+      security: [{ bearerAuth: [] }],
+      parameters: [
+        { name: 'status', in: 'query', schema: { type: 'string', enum: ['not_started', 'ongoing', 'completed'] } },
+        { name: 'riskRating', in: 'query', schema: { type: 'string', enum: ['High', 'Medium', 'Low', 'Very High', 'Very Low'] } },
+        { name: 'quarter', in: 'query', schema: { type: 'string', enum: ['Q1', 'Q2', 'Q3', 'Q4'] } },
+        { name: 'search', in: 'query', schema: { type: 'string' } }
+      ],
+      responses: { '200': { description: 'Approved-plan overview data retrieved' }, '401': { $ref: '#/components/responses/Unauthorized' }, '403': { $ref: '#/components/responses/Forbidden' } }
     }
   },
   '/api/team-lead/approved-plans': {
@@ -5592,6 +5623,67 @@ Object.assign(swaggerDocument.paths, {
       parameters: [{ name: 'submissionId', in: 'path', required: true, schema: { type: 'string' } }],
       responses: {
         '200': { description: 'Board-ready export payload retrieved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/bac/dashboard': {
+    get: {
+      summary: 'Get BAC dashboard data',
+      tags: ['BAC/Secretariat'],
+      security: [{ bearerAuth: [] }],
+      responses: {
+        '200': { description: 'BAC dashboard retrieved' }
+      }
+    }
+  },
+  '/api/bac/board-approvals/{id}': {
+    get: {
+      summary: 'Get one BAC board approval detail',
+      tags: ['BAC/Secretariat'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        '200': { description: 'BAC board approval detail retrieved' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/bac/board-approvals/{id}/supporting-document': {
+    post: {
+      summary: 'Upload BAC supporting document',
+      tags: ['BAC/Secretariat'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'multipart/form-data': {
+            schema: {
+              type: 'object',
+              required: ['documentFile'],
+              properties: {
+                documentFile: { type: 'string', format: 'binary' }
+              }
+            }
+          }
+        }
+      },
+      responses: {
+        '200': { description: 'Supporting document uploaded' },
+        '404': { $ref: '#/components/responses/NotFound' }
+      }
+    }
+  },
+  '/api/bac/board-approvals/{id}/approve': {
+    post: {
+      summary: 'Approve a board item from the BAC dashboard',
+      tags: ['BAC/Secretariat'],
+      security: [{ bearerAuth: [] }],
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      responses: {
+        '200': { description: 'Board approval recorded' },
+        '400': { description: 'Invalid workflow status' },
         '404': { $ref: '#/components/responses/NotFound' }
       }
     }

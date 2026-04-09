@@ -6,6 +6,7 @@ const AuditPlan = require('../models/AuditPlan');
 const RiskAssessment = require('../models/RiskAssessment');
 const User = require('../models/User');
 const AuditAssignmentTask = require('../models/AuditAssignmentTask');
+const DocumentRequest = require('../models/DocumentRequest');
 const Notification = require('../models/Notification');
 const { uploadAuditMethodologyDocument, deleteFromCloudinary } = require('../middleware/upload');
 const { sequelize } = require('../config/database');
@@ -18,8 +19,97 @@ router.use(hasRoleLevel('team_lead'));
 const APPROVED_PLAN_STATUSES = new Set(['approved', 'consolidated', 'implemented']);
 const TEAM_LEAD_PLANNING_STATUSES = new Set(['draft', 'submitted_for_approval', 'approved', 'rejected']);
 const TEAM_LEAD_EDITABLE_STATUSES = new Set(['draft', 'rejected']);
-const TEAM_LEAD_APPROVAL_TARGETS = ['quality_assurance', 'unit_head', 'chief_audit_executive'];
+const TEAM_LEAD_APPROVAL_TARGETS = ['unit_head', 'quality_assurance', 'chief_audit_executive'];
+const DEFAULT_TEAM_LEAD_APPROVAL_TARGET = 'unit_head';
 const TEAM_LEAD_AUDIT_CLASSIFICATIONS = ['Compliance', 'Operational', 'Financial', 'Information Technology', 'Investigative', 'Forensic', 'Thematic', 'Follow-Up', 'Ad Hoc', 'Other'];
+
+const buildDocumentRequestNumber = () => 'DR-' + Date.now() + '-' + Math.floor(Math.random() * 1000);
+
+const normalizeBulkEmailList = (values = []) => {
+  if (!Array.isArray(values)) return [];
+
+  return Array.from(new Set(
+    values
+      .flatMap((value) => String(value || '').split(/[\n,;]/))
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+  ));
+};
+
+const normalizeRequestedItems = (title, documentTitles) => {
+  if (Array.isArray(documentTitles) && documentTitles.length > 0) {
+    return documentTitles
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .map((item, index) => ({ id: index + 1, title: item, status: 'requested' }));
+  }
+
+  return [{ id: 1, title: String(title || '').trim(), status: 'requested' }];
+};
+
+const slugifyFolderKey = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+const createTeamLeadDocumentRequest = async ({
+  requester,
+  auditee,
+  linkedAuditPlan,
+  title,
+  description,
+  category,
+  priority,
+  department,
+  dueDate,
+  metadata,
+  recipientEmail,
+  folderName,
+  folderKey,
+  documentTitles
+}) => {
+  const effectiveDepartment = department || auditee.department || linkedAuditPlan?.department || requester.department || null;
+  const effectiveFolderKey = folderKey || (folderName ? slugifyFolderKey(folderName) : null);
+  const requestedItems = normalizeRequestedItems(title, documentTitles);
+
+  const request = await DocumentRequest.create({
+    requestNumber: buildDocumentRequestNumber(),
+    title: String(title || '').trim(),
+    description: description || null,
+    category: category || 'governance',
+    priority: priority || 'medium',
+    recipientEmail: recipientEmail || auditee.email || null,
+    folderName: folderName || 'governance-documents',
+    folderKey: effectiveFolderKey,
+    requestedItems,
+    requestedBy: requester.id,
+    assignedTo: auditee.id,
+    auditPlanId: linkedAuditPlan?.id || null,
+    department: effectiveDepartment,
+    dueDate: dueDate || null,
+    metadata: {
+      ...(metadata || {}),
+      createdByName: requester.name,
+      createdByRole: requester.role,
+      requestedItemCount: requestedItems.length
+    }
+  });
+
+  await Notification.create({
+    userId: auditee.id,
+    type: 'assignment',
+    title: 'New governance document request assigned',
+    message: requester.name + ' requested ' + request.title + '.',
+    auditPlanId: request.auditPlanId || null,
+    documentRequestId: request.id,
+    metadata: {
+      documentRequestId: request.id,
+      status: request.status,
+      requestedBy: requester.id,
+      requestedByName: requester.name,
+      requestedItems
+    }
+  });
+
+  return request;
+};
 
 const getQuarterFromDate = (dateValue) => {
   if (!dateValue) return null;
@@ -64,6 +154,13 @@ const deriveApmRiskRating = (score, plan) => {
   if (score >= 40) return 'Medium';
   if (score >= 20) return 'Low';
   return 'Very Low';
+};
+
+const collapseRiskRatingForDisplay = (rating) => {
+  const normalized = String(rating || '').trim();
+  if (['Very High', 'High'].includes(normalized)) return 'High';
+  if (normalized === 'Medium') return 'Medium';
+  return 'Low';
 };
 
 const getProposedQuarters = (plan) => {
@@ -111,8 +208,15 @@ const isApprovedPlanForOverview = (plan) => {
   return APPROVED_PLAN_STATUSES.has(plan?.status) || apmStatus === 'approved';
 };
 
+const isTeamLeadWorkspaceCandidate = (plan) => {
+  if (!plan) return false;
+  if (isApprovedPlanForOverview(plan)) return true;
+  return Boolean(plan?.metadata?.teamLeadPlanning);
+};
+
 const serializeApprovedPlan = (plan, teamMemberCount = 0) => {
   const riskScore = deriveApmRiskScore(plan);
+  const riskRating = deriveApmRiskRating(riskScore, plan);
   const executionStatus = deriveApprovedPlanExecutionStatus(plan);
   const quarters = getProposedQuarters(plan);
 
@@ -122,10 +226,16 @@ const serializeApprovedPlan = (plan, teamMemberCount = 0) => {
     title: plan.title,
     businessUnit: plan.department || 'Unassigned Unit',
     riskScore,
-    riskRating: deriveApmRiskRating(riskScore, plan),
+    riskRating,
+    riskRatingDisplay: collapseRiskRatingForDisplay(riskRating),
     quarters,
     auditPeriod: plan.auditPeriod || null,
     executionStatus,
+    executionStatusLabel: executionStatus === 'ongoing'
+      ? 'Ongoing'
+      : executionStatus === 'completed'
+        ? 'Completed'
+        : 'Not Started',
     progressPercentage: Number(
       (
         plan?.metadata?.execution?.progressPercentage !== undefined
@@ -264,6 +374,12 @@ const getPlanningApprovalStatusLabel = (status) => {
   return 'Draft';
 };
 
+const getTaskStatusLabel = (status) => {
+  if (status === 'in_progress') return 'In Progress';
+  if (status === 'completed') return 'Completed';
+  return 'Pending';
+};
+
 const buildPlanningSummary = (workspace) => ({
   objectiveCount: workspace.objectives.length,
   procedureCount: workspace.testProcedures.length,
@@ -344,7 +460,7 @@ const buildTeamLeadPlanningWorkspace = (plan, leadTask = null) => {
     methodologyDocument: stored.methodologyDocument || null,
     testProcedures,
     approval: {
-      targetRole: TEAM_LEAD_APPROVAL_TARGETS.includes(stored?.approval?.targetRole) ? stored.approval.targetRole : 'quality_assurance',
+      targetRole: TEAM_LEAD_APPROVAL_TARGETS.includes(stored?.approval?.targetRole) ? stored.approval.targetRole : DEFAULT_TEAM_LEAD_APPROVAL_TARGET,
       status: approvalStatus,
       statusLabel: getPlanningApprovalStatusLabel(approvalStatus),
       submittedAt: stored?.approval?.submittedAt || null,
@@ -401,6 +517,222 @@ const serializeTeamLeadAssignment = (plan, activeTaskCount = 0) => {
   };
 };
 
+const buildApprovedPlanStatusOverview = (rows = []) => {
+  const ongoing = rows.filter((row) => row.executionStatus === 'ongoing').length;
+  const notStarted = rows.filter((row) => row.executionStatus === 'not_started').length;
+  const completed = rows.filter((row) => row.executionStatus === 'completed').length;
+
+  return {
+    totalAudits: rows.length,
+    ongoing,
+    notStarted,
+    completed,
+    chart: [
+      { key: 'ongoing', name: 'Ongoing', label: 'Ongoing', value: ongoing, count: ongoing, color: '#3B82F6' },
+      { key: 'not_started', name: 'Not Started', label: 'Not Started', value: notStarted, count: notStarted, color: '#F59E0B' },
+      { key: 'completed', name: 'Completed', label: 'Completed', value: completed, count: completed, color: '#10B981' }
+    ]
+  };
+};
+
+const loadPlanCollaborators = async (plan, currentUser = null) => {
+  const requestedIds = Array.from(new Set([
+    plan?.teamLeadId,
+    ...(Array.isArray(plan?.teamMemberIds) ? plan.teamMemberIds : []),
+    currentUser?.id
+  ].filter(Boolean)));
+
+  const users = requestedIds.length > 0
+    ? await User.findAll({
+        where: {
+          id: { [Op.in]: requestedIds },
+          isActive: true
+        },
+        attributes: ['id', 'name', 'email', 'role', 'department'],
+        order: [['name', 'ASC']]
+      })
+    : [];
+
+  const userMap = new Map(users.map((user) => [String(user.id), user]));
+  const teamLead = plan?.teamLeadId ? userMap.get(String(plan.teamLeadId)) || null : null;
+  const teamMembers = Array.from(new Set(Array.isArray(plan?.teamMemberIds) ? plan.teamMemberIds.filter(Boolean).map(String) : []))
+    .map((id) => userMap.get(id))
+    .filter(Boolean)
+    .map((user) => ({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      department: user.department || null
+    }));
+
+  const assigneeOptions = [];
+  if (currentUser) {
+    assigneeOptions.push({
+      id: currentUser.id,
+      value: currentUser.id,
+      label: currentUser.id === plan?.teamLeadId ? 'Team Lead (Me)' : `${currentUser.name} (Me)`,
+      name: currentUser.name,
+      email: currentUser.email || null,
+      role: currentUser.role,
+      type: currentUser.id === plan?.teamLeadId ? 'team_lead' : 'current_user'
+    });
+  } else if (teamLead) {
+    assigneeOptions.push({
+      id: teamLead.id,
+      value: teamLead.id,
+      label: `${teamLead.name} (Team Lead)`,
+      name: teamLead.name,
+      email: teamLead.email || null,
+      role: teamLead.role,
+      type: 'team_lead'
+    });
+  }
+
+  teamMembers.forEach((member) => {
+    if (!assigneeOptions.some((item) => String(item.id) === String(member.id))) {
+      assigneeOptions.push({
+        id: member.id,
+        value: member.id,
+        label: member.name,
+        name: member.name,
+        email: member.email || null,
+        role: member.role,
+        type: 'team_member'
+      });
+    }
+  });
+
+  return {
+    teamLead: teamLead
+      ? {
+          id: teamLead.id,
+          name: teamLead.name,
+          email: teamLead.email,
+          role: teamLead.role,
+          department: teamLead.department || null
+        }
+      : currentUser
+        ? {
+            id: currentUser.id,
+            name: currentUser.name,
+            email: currentUser.email || null,
+            role: currentUser.role,
+            department: currentUser.department || null
+          }
+        : null,
+    teamMembers,
+    assigneeOptions
+  };
+};
+
+const buildWorkspaceResponsePayload = async (plan, leadTask, currentUser) => {
+  const workspace = buildTeamLeadPlanningWorkspace(plan, leadTask);
+  const collaborators = await loadPlanCollaborators(plan, currentUser);
+
+  return {
+    workspace: {
+      ...workspace,
+      teamLead: collaborators.teamLead,
+      teamMembers: collaborators.teamMembers,
+      assigneeOptions: collaborators.assigneeOptions,
+      approvalPath: TEAM_LEAD_APPROVAL_TARGETS
+    },
+    assignment: serializeTeamLeadAssignment(plan)
+  };
+};
+
+const buildTeamLeadApmMetadata = ({ plan, workspacePatch, actor, targetRole, notes }) => {
+  const previous = plan.metadata?.apm || {};
+  const submittedAt = new Date();
+  const riskScore = deriveApmRiskScore(plan);
+  const riskRating = deriveApmRiskRating(riskScore, plan);
+  const objectives = workspacePatch.objectives.map((item) => item.text).filter(Boolean);
+  const proposedQuarters = getProposedQuarters(plan);
+
+  return {
+    ...previous,
+    submitted: true,
+    submittedAt,
+    submittedBy: actor.id,
+    submittedByName: actor.name,
+    submissionNotes: notes || null,
+    auditClassification: workspacePatch.basicInformation.auditClassification || null,
+    classification: workspacePatch.basicInformation.auditClassification || null,
+    durationDays: workspacePatch.basicInformation.durationDays || null,
+    objectives,
+    scopeOfReview: workspacePatch.scopeOfReview || null,
+    riskAnalysis: workspacePatch.raca.riskAnalysis || null,
+    controlAnalysis: workspacePatch.raca.controlAnalysis || null,
+    auditApproach: workspacePatch.auditApproach || null,
+    auditProcess: workspacePatch.auditProcess || null,
+    testProcedures: workspacePatch.testProcedures,
+    proposedQuarters,
+    proposedFrequency: previous.proposedFrequency || (proposedQuarters.length > 1 ? 'Quarterly' : 'Annual'),
+    operationalRiskScore: riskScore,
+    riskRating,
+    apmStatus: targetRole === 'unit_head'
+      ? 'pending_approval'
+      : previous.apmStatus || 'draft',
+    qaSubmission: targetRole === 'quality_assurance'
+      ? {
+          submittedToQa: true,
+          target: 'quality_assurance',
+          purpose: 'team_lead_planning',
+          submittedAt,
+          submittedBy: actor.id,
+          submittedByName: actor.name,
+          notes: notes || null
+        }
+      : previous.qaSubmission || null,
+    caeSubmission: targetRole === 'chief_audit_executive'
+      ? {
+          submittedToCae: true,
+          submittedAt,
+          submittedBy: actor.id,
+          submittedByName: actor.name,
+          notes: notes || null
+        }
+      : previous.caeSubmission || null
+  };
+};
+
+const serializeAssignedTaskRow = ({ plan, assignmentRole, task }) => {
+  const approvedPlan = serializeApprovedPlan(plan);
+  const normalizedTaskStatus = assignmentRole === 'team_member'
+    ? normalizeExecutionStatus(task?.status)
+    : approvedPlan.executionStatus;
+  const statusKey = normalizedTaskStatus || 'not_started';
+  const status = statusKey === 'ongoing' ? 'In Progress' : statusKey === 'completed' ? 'Completed' : 'Pending';
+  const progress = statusKey === 'completed'
+    ? 100
+    : statusKey === 'ongoing'
+      ? Math.max(approvedPlan.progressPercentage || 0, 5)
+      : 0;
+
+  return {
+    id: task?.id || `${plan.id}:${assignmentRole}`,
+    planId: plan.id,
+    taskId: task?.id || null,
+    title: approvedPlan.title,
+    businessUnit: approvedPlan.businessUnit,
+    role: assignmentRole === 'team_lead' ? 'Team Lead' : 'Team Member',
+    roleKey: assignmentRole,
+    startDate: plan.startDate || null,
+    endDate: plan.endDate || null,
+    status,
+    statusKey,
+    progress,
+    riskRating: approvedPlan.riskRatingDisplay,
+    executionStatus: approvedPlan.executionStatus,
+    actions: {
+      view: assignmentRole === 'team_lead'
+        ? `/api/team-lead/assignments/${plan.id}/workspace`
+        : (task ? `/api/audit/my-assignments/${task.id}` : null)
+    }
+  };
+};
+
 const loadTeamLeadPlanForWorkspace = async (planId, teamLeadId) => {
   return AuditPlan.findOne({
     where: {
@@ -413,7 +745,7 @@ const loadTeamLeadPlanForWorkspace = async (planId, teamLeadId) => {
 
 const ensureCommencedPlan = async (planId, userId) => {
   const plan = await loadTeamLeadPlanForWorkspace(planId, userId);
-  if (!plan || !isApprovedPlanForOverview(plan)) {
+  if (!plan || !isTeamLeadWorkspaceCandidate(plan)) {
     return { error: { status: 404, message: 'Assigned audit not found' } };
   }
 
@@ -571,6 +903,224 @@ const findPlanningApprovalRecipients = async (plan, targetRole, currentUser) => 
     order: [['name', 'ASC']]
   });
 };
+
+router.post('/document-requests/preview', async (req, res) => {
+  try {
+    const {
+      title,
+      auditPlanId,
+      folderName,
+      folderKey,
+      documentTitles,
+      auditeeEmails,
+      auditees
+    } = req.body || {};
+
+    const normalizedEmails = normalizeBulkEmailList([
+      ...(Array.isArray(auditeeEmails) ? auditeeEmails : []),
+      ...(Array.isArray(auditees) ? auditees.map((item) => item?.email) : [])
+    ]);
+
+    if (!title || normalizedEmails.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide title and at least one auditee email'
+      });
+    }
+
+    const linkedAuditPlan = auditPlanId
+      ? await AuditPlan.findOne({
+          where: { id: auditPlanId, teamLeadId: req.user.id },
+          attributes: ['id', 'title', 'planNumber', 'department', 'teamLeadId']
+        })
+      : null;
+
+    if (auditPlanId && !linkedAuditPlan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Audit plan not found for this team lead'
+      });
+    }
+
+    const auditeeUsers = await User.findAll({
+      where: {
+        email: { [Op.in]: normalizedEmails },
+        role: 'auditee',
+        isActive: true
+      },
+      attributes: ['id', 'name', 'email', 'role', 'department']
+    });
+
+    const auditeeByEmail = new Map(auditeeUsers.map((user) => [String(user.email || '').toLowerCase(), user]));
+    const missingEmails = normalizedEmails.filter((email) => !auditeeByEmail.has(email));
+
+    const resolvedAuditees = normalizedEmails
+      .map((email) => {
+        const user = auditeeByEmail.get(email);
+        if (!user) return null;
+
+        const auditeeConfig = Array.isArray(auditees)
+          ? auditees.find((item) => String(item?.email || '').trim().toLowerCase() === email)
+          : null;
+        const resolvedDocumentTitles = Array.isArray(auditeeConfig?.documentTitles) && auditeeConfig.documentTitles.length > 0
+          ? auditeeConfig.documentTitles.map((item) => String(item || '').trim()).filter(Boolean)
+          : Array.isArray(documentTitles)
+            ? documentTitles.map((item) => String(item || '').trim()).filter(Boolean)
+            : [];
+
+        return {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          department: user.department || null,
+          folderName: folderName || 'governance-documents',
+          folderKey: folderKey || (folderName ? slugifyFolderKey(folderName) : null),
+          requestedItems: normalizeRequestedItems(title, resolvedDocumentTitles)
+        };
+      })
+      .filter(Boolean);
+
+    return res.json({
+      success: true,
+      data: {
+        title: String(title).trim(),
+        auditPlan: linkedAuditPlan
+          ? {
+              id: linkedAuditPlan.id,
+              title: linkedAuditPlan.title,
+              planNumber: linkedAuditPlan.planNumber,
+              department: linkedAuditPlan.department || null
+            }
+          : null,
+        count: resolvedAuditees.length,
+        resolvedAuditees,
+        missingEmails
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error previewing team lead bulk document requests',
+      error: error.message
+    });
+  }
+});
+
+router.post('/document-requests/bulk', async (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      category,
+      priority,
+      auditPlanId,
+      department,
+      dueDate,
+      metadata,
+      folderName,
+      folderKey,
+      documentTitles,
+      auditeeEmails,
+      auditees
+    } = req.body || {};
+
+    const normalizedEmails = normalizeBulkEmailList([
+      ...(Array.isArray(auditeeEmails) ? auditeeEmails : []),
+      ...(Array.isArray(auditees) ? auditees.map((item) => item?.email) : [])
+    ]);
+
+    if (!title || normalizedEmails.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide title and at least one auditee email'
+      });
+    }
+
+    const linkedAuditPlan = auditPlanId
+      ? await AuditPlan.findOne({
+          where: { id: auditPlanId, teamLeadId: req.user.id },
+          attributes: ['id', 'title', 'planNumber', 'department', 'teamLeadId']
+        })
+      : null;
+
+    if (auditPlanId && !linkedAuditPlan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Audit plan not found for this team lead'
+      });
+    }
+
+    const auditeeUsers = await User.findAll({
+      where: {
+        email: { [Op.in]: normalizedEmails },
+        role: 'auditee',
+        isActive: true
+      },
+      attributes: ['id', 'name', 'role', 'department', 'isActive', 'email']
+    });
+
+    const auditeeByEmail = new Map(auditeeUsers.map((user) => [String(user.email || '').toLowerCase(), user]));
+    const missingEmails = normalizedEmails.filter((email) => !auditeeByEmail.has(email));
+
+    if (auditeeUsers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No matching active auditees were found for the supplied emails',
+        missingEmails
+      });
+    }
+
+    const requests = [];
+    for (const email of normalizedEmails) {
+      const auditee = auditeeByEmail.get(email);
+      if (!auditee) continue;
+
+      const auditeeConfig = Array.isArray(auditees)
+        ? auditees.find((item) => String(item?.email || '').trim().toLowerCase() === email)
+        : null;
+
+      const request = await createTeamLeadDocumentRequest({
+        requester: req.user,
+        auditee,
+        linkedAuditPlan,
+        title,
+        description,
+        category,
+        priority,
+        department,
+        dueDate,
+        metadata: {
+          ...(metadata || {}),
+          batchRequest: true,
+          batchEmail: email,
+          source: 'team_lead_modal'
+        },
+        recipientEmail: auditeeConfig?.email || email,
+        folderName,
+        folderKey,
+        documentTitles: Array.isArray(auditeeConfig?.documentTitles) && auditeeConfig.documentTitles.length > 0
+          ? auditeeConfig.documentTitles
+          : documentTitles
+      });
+
+      requests.push(request);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Bulk document requests created successfully',
+      count: requests.length,
+      data: requests,
+      missingEmails
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error creating team lead bulk document requests',
+      error: error.message
+    });
+  }
+});
 
 router.get('/dashboard', async (req, res) => {
   try {
@@ -780,7 +1330,7 @@ router.post('/assignments/:id/commence', async (req, res) => {
           auditProcess: existingPlanning.auditProcess || '',
           methodologyDocument: existingPlanning.methodologyDocument || null,
           testProcedures: Array.isArray(existingPlanning.testProcedures) ? existingPlanning.testProcedures : [],
-          approval: existingPlanning.approval || { targetRole: 'quality_assurance', status: 'draft' },
+          approval: existingPlanning.approval || { targetRole: DEFAULT_TEAM_LEAD_APPROVAL_TARGET, status: 'draft' },
           workflowHistory: Array.isArray(existingPlanning.workflowHistory) ? existingPlanning.workflowHistory : []
         }
       }
@@ -879,13 +1429,9 @@ router.get('/assignments/:id/workspace', async (req, res) => {
       return res.status(result.error.status).json({ success: false, message: result.error.message });
     }
 
-    const workspace = buildTeamLeadPlanningWorkspace(result.plan, result.leadTask);
     return res.json({
       success: true,
-      data: {
-        workspace,
-        assignment: serializeTeamLeadAssignment(result.plan)
-      }
+      data: await buildWorkspaceResponsePayload(result.plan, result.leadTask, req.user)
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Error loading audit planning workspace', error: error.message });
@@ -915,10 +1461,7 @@ router.put('/assignments/:id/workspace', async (req, res) => {
     return res.json({
       success: true,
       message: 'Audit planning workspace updated successfully',
-      data: {
-        workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask),
-        assignment: serializeTeamLeadAssignment(refreshedPlan)
-      }
+      data: await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user)
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Error updating audit planning workspace', error: error.message });
@@ -955,7 +1498,7 @@ router.post('/assignments/:id/workspace/objectives', async (req, res) => {
       message: 'Audit objective added successfully',
       data: {
         objective: nextObjectives[nextObjectives.length - 1],
-        workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask)
+        workspace: (await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user)).workspace
       }
     });
   } catch (error) {
@@ -990,7 +1533,7 @@ router.delete('/assignments/:id/workspace/objectives/:objectiveId', async (req, 
     return res.json({
       success: true,
       message: 'Audit objective deleted successfully',
-      data: { workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask) }
+      data: { workspace: (await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user)).workspace }
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Error deleting audit objective', error: error.message });
@@ -1025,13 +1568,14 @@ router.post('/assignments/:id/workspace/methodology-document', uploadAuditMethod
       actor: req.user,
       submitted: false
     });
+    const responsePayload = await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user);
 
     return res.json({
       success: true,
       message: 'Methodology document uploaded successfully',
       data: {
-        methodologyDocument: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask).methodologyDocument,
-        workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask)
+        methodologyDocument: responsePayload.workspace.methodologyDocument,
+        workspace: responsePayload.workspace
       }
     });
   } catch (error) {
@@ -1082,7 +1626,7 @@ router.post('/assignments/:id/workspace/procedures', async (req, res) => {
       message: 'Test procedure added successfully',
       data: {
         procedure,
-        workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask)
+        workspace: (await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user)).workspace
       }
     });
   } catch (error) {
@@ -1134,7 +1678,7 @@ router.put('/assignments/:id/workspace/procedures/:procedureId', async (req, res
       message: 'Test procedure updated successfully',
       data: {
         procedure: nextProcedure,
-        workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask)
+        workspace: (await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user)).workspace
       }
     });
   } catch (error) {
@@ -1169,7 +1713,7 @@ router.delete('/assignments/:id/workspace/procedures/:procedureId', async (req, 
     return res.json({
       success: true,
       message: 'Test procedure deleted successfully',
-      data: { workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask) }
+      data: { workspace: (await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user)).workspace }
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Error deleting test procedure', error: error.message });
@@ -1199,10 +1743,7 @@ router.post('/assignments/:id/workspace/save-draft', async (req, res) => {
     return res.json({
       success: true,
       message: 'Audit planning draft saved successfully',
-      data: {
-        workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask),
-        assignment: serializeTeamLeadAssignment(refreshedPlan)
-      }
+      data: await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user)
     });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Error saving audit planning draft', error: error.message });
@@ -1224,7 +1765,7 @@ router.post('/assignments/:id/workspace/submit', async (req, res) => {
     const patch = buildPlanningPatchFromBody(req.body || {}, currentWorkspace);
     const targetRole = TEAM_LEAD_APPROVAL_TARGETS.includes(req.body?.targetRole)
       ? req.body.targetRole
-      : currentWorkspace.approval.targetRole || 'quality_assurance';
+      : currentWorkspace.approval.targetRole || DEFAULT_TEAM_LEAD_APPROVAL_TARGET;
     const validationErrors = buildPlanningValidationErrors(patch);
     if (validationErrors.length > 0) {
       return res.status(400).json({
@@ -1255,6 +1796,22 @@ router.post('/assignments/:id/workspace/submit', async (req, res) => {
       approval
     });
 
+    if (targetRole === 'unit_head' || targetRole === 'quality_assurance' || targetRole === 'chief_audit_executive') {
+      await refreshedPlan.update({
+        metadata: {
+          ...(refreshedPlan.metadata || {}),
+          apm: buildTeamLeadApmMetadata({
+            plan: refreshedPlan,
+            workspacePatch: patch,
+            actor: req.user,
+            targetRole,
+            notes: req.body?.notes || null
+          })
+        }
+      });
+      await refreshedPlan.reload({ include: approvedPlanInclude });
+    }
+
     const recipients = await findPlanningApprovalRecipients(refreshedPlan, targetRole, req.user);
     for (const recipient of recipients) {
       await Notification.create({
@@ -1279,7 +1836,7 @@ router.post('/assignments/:id/workspace/submit', async (req, res) => {
       success: true,
       message: 'Audit planning workspace submitted for approval successfully',
       data: {
-        workspace: buildTeamLeadPlanningWorkspace(refreshedPlan, result.leadTask),
+        workspace: (await buildWorkspaceResponsePayload(refreshedPlan, result.leadTask, req.user)).workspace,
         recipients: recipients.map((recipient) => ({ id: recipient.id, name: recipient.name, role: recipient.role }))
       }
     });
@@ -1321,15 +1878,168 @@ router.get('/approved-plans', async (req, res) => {
       );
     }
 
+    const statusOverview = buildApprovedPlanStatusOverview(rows);
+
     return res.json({
       success: true,
       count: rows.length,
+      summary: {
+        totalAudits: statusOverview.totalAudits,
+        ongoing: statusOverview.ongoing,
+        notStarted: statusOverview.notStarted,
+        completed: statusOverview.completed
+      },
+      statusOverview,
       data: rows
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
       message: 'Error fetching approved plans',
+      error: error.message
+    });
+  }
+});
+
+router.get('/approved-plan-data', async (req, res) => {
+  try {
+    const { status, riskRating, quarter, search } = req.query;
+    const plans = await loadTeamLeadPlans(req.user.id);
+
+    let rows = plans.map((plan) => serializeApprovedPlan(plan));
+
+    if (status) {
+      const normalizedStatus = normalizeExecutionStatus(status);
+      if (normalizedStatus) rows = rows.filter((plan) => plan.executionStatus === normalizedStatus);
+    }
+
+    if (riskRating) {
+      const normalizedRisk = String(riskRating).toLowerCase();
+      rows = rows.filter((plan) =>
+        String(plan.riskRatingDisplay || plan.riskRating).toLowerCase() === normalizedRisk ||
+        String(plan.riskRating).toLowerCase() === normalizedRisk
+      );
+    }
+
+    if (quarter) {
+      const normalizedQuarter = String(quarter).toUpperCase();
+      rows = rows.filter((plan) => plan.quarters.includes(normalizedQuarter));
+    }
+
+    if (search) {
+      const q = String(search).toLowerCase();
+      rows = rows.filter((plan) =>
+        String(plan.title || '').toLowerCase().includes(q) ||
+        String(plan.planNumber || '').toLowerCase().includes(q) ||
+        String(plan.businessUnit || '').toLowerCase().includes(q)
+      );
+    }
+
+    const statusOverview = buildApprovedPlanStatusOverview(rows);
+    return res.json({
+      success: true,
+      data: {
+        summary: {
+          totalAudits: statusOverview.totalAudits,
+          ongoing: statusOverview.ongoing,
+          notStarted: statusOverview.notStarted,
+          completed: statusOverview.completed
+        },
+        statusOverview,
+        rows
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error loading approved plan overview',
+      error: error.message
+    });
+  }
+});
+
+router.get('/assigned-tasks', async (req, res) => {
+  try {
+    const { status = 'All', role = 'all', search } = req.query;
+    const plans = await AuditPlan.findAll({
+      where: {
+        [Op.or]: [
+          { teamLeadId: req.user.id },
+          { teamMemberIds: { [Op.contains]: [req.user.id] } }
+        ]
+      },
+      include: approvedPlanInclude,
+      order: [['createdAt', 'DESC']]
+    });
+
+    const planIds = plans.map((plan) => plan.id);
+    const tasks = planIds.length > 0
+      ? await AuditAssignmentTask.findAll({
+          where: {
+            auditPlanId: { [Op.in]: planIds },
+            assigneeId: req.user.id,
+            isActive: true
+          },
+          attributes: ['id', 'auditPlanId', 'assignmentRole', 'status']
+        })
+      : [];
+
+    const taskByKey = new Map(tasks.map((task) => [`${task.auditPlanId}:${task.assignmentRole}`, task]));
+    let rows = [];
+
+    plans.forEach((plan) => {
+      if (String(plan.teamLeadId || '') === String(req.user.id)) {
+        rows.push(serializeAssignedTaskRow({
+          plan,
+          assignmentRole: 'team_lead',
+          task: taskByKey.get(`${plan.id}:team_lead`) || null
+        }));
+      }
+
+      if (Array.isArray(plan.teamMemberIds) && plan.teamMemberIds.map(String).includes(String(req.user.id))) {
+        rows.push(serializeAssignedTaskRow({
+          plan,
+          assignmentRole: 'team_member',
+          task: taskByKey.get(`${plan.id}:team_member`) || null
+        }));
+      }
+    });
+
+    if (role && String(role).toLowerCase() !== 'all') {
+      const normalizedRole = String(role).toLowerCase();
+      rows = rows.filter((item) => String(item.roleKey).toLowerCase() === normalizedRole);
+    }
+
+    if (status && String(status).toLowerCase() !== 'all') {
+      const normalizedStatus = String(status).toLowerCase();
+      rows = rows.filter((item) => String(item.status).toLowerCase() === normalizedStatus);
+    }
+
+    if (search) {
+      const query = String(search).toLowerCase();
+      rows = rows.filter((item) =>
+        String(item.title || '').toLowerCase().includes(query) ||
+        String(item.businessUnit || '').toLowerCase().includes(query)
+      );
+    }
+
+    return res.json({
+      success: true,
+      count: rows.length,
+      summary: {
+        total: rows.length,
+        pending: rows.filter((item) => item.statusKey === 'not_started').length,
+        inProgress: rows.filter((item) => item.statusKey === 'ongoing').length,
+        completed: rows.filter((item) => item.statusKey === 'completed').length,
+        teamLeadAssignments: rows.filter((item) => item.roleKey === 'team_lead').length,
+        teamMemberAssignments: rows.filter((item) => item.roleKey === 'team_member').length
+      },
+      data: rows
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching Team Lead assigned tasks',
       error: error.message
     });
   }
