@@ -153,6 +153,81 @@ const normalizeRequestedItems = (title, documentTitles) => {
   return [{ id: 1, title: String(title || '').trim(), status: 'requested' }];
 };
 
+const normalizeEmailList = (values = []) => {
+  if (!Array.isArray(values)) return [];
+
+  return Array.from(new Set(
+    values
+      .flatMap((value) => String(value || '').split(/[\n,;]/))
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean)
+  ));
+};
+
+const slugifyFolderKey = (value) => String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+const createDocumentRequestForAuditee = async ({
+  requester,
+  auditee,
+  linkedAuditPlan,
+  title,
+  description,
+  category,
+  priority,
+  department,
+  dueDate,
+  metadata,
+  recipientEmail,
+  folderName,
+  folderKey,
+  documentTitles
+}) => {
+  const effectiveDepartment = department || auditee.department || linkedAuditPlan?.department || requester.department || null;
+  const effectiveFolderKey = folderKey || (folderName ? slugifyFolderKey(folderName) : null);
+  const requestedItems = normalizeRequestedItems(title, documentTitles);
+
+  const request = await DocumentRequest.create({
+    requestNumber: buildDocumentRequestNumber(),
+    title: title.trim(),
+    description: description || null,
+    category: category || 'governance',
+    priority: priority || 'medium',
+    recipientEmail: recipientEmail || auditee.email || null,
+    folderName: folderName || 'governance-documents',
+    folderKey: effectiveFolderKey,
+    requestedItems,
+    requestedBy: requester.id,
+    assignedTo: auditee.id,
+    auditPlanId: linkedAuditPlan?.id || null,
+    department: effectiveDepartment,
+    dueDate: dueDate || null,
+    metadata: {
+      ...(metadata || {}),
+      createdByName: requester.name,
+      createdByRole: requester.role,
+      requestedItemCount: requestedItems.length
+    }
+  });
+
+  await Notification.create({
+    userId: auditee.id,
+    type: 'assignment',
+    title: 'New governance document request assigned',
+    message: requester.name + ' requested ' + request.title + '.',
+    auditPlanId: request.auditPlanId || null,
+    documentRequestId: request.id,
+    metadata: {
+      documentRequestId: request.id,
+      status: request.status,
+      requestedBy: requester.id,
+      requestedByName: requester.name,
+      requestedItems
+    }
+  });
+
+  return request;
+};
+
 const normalizeProcedure = (item, index = 0) => {
   if (typeof item === 'string') {
     return {
@@ -946,6 +1021,120 @@ router.get('/audit-notifications/:id', hasRoleLevel('team_member'), async (req, 
   }
 });
 
+router.post('/document-requests/bulk', hasRoleLevel('team_member'), async (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      category,
+      priority,
+      auditPlanId,
+      department,
+      dueDate,
+      metadata,
+      folderName,
+      folderKey,
+      documentTitles,
+      auditeeEmails,
+      auditees
+    } = req.body || {};
+
+    const normalizedEmails = normalizeEmailList([
+      ...(Array.isArray(auditeeEmails) ? auditeeEmails : []),
+      ...(Array.isArray(auditees) ? auditees.map((item) => item?.email) : [])
+    ]);
+
+    if (!title || normalizedEmails.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide title and at least one auditee email'
+      });
+    }
+
+    const linkedAuditPlan = auditPlanId
+      ? await AuditPlan.findByPk(auditPlanId, {
+          attributes: ['id', 'title', 'planNumber', 'department']
+        })
+      : null;
+
+    if (auditPlanId && !linkedAuditPlan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Audit plan not found'
+      });
+    }
+
+    const auditeeUsers = await User.findAll({
+      where: {
+        email: { [Op.in]: normalizedEmails },
+        role: 'auditee',
+        isActive: true
+      },
+      attributes: ['id', 'name', 'role', 'department', 'isActive', 'email']
+    });
+
+    const auditeeByEmail = new Map(auditeeUsers.map((user) => [String(user.email || '').toLowerCase(), user]));
+    const missingEmails = normalizedEmails.filter((email) => !auditeeByEmail.has(email));
+
+    if (auditeeUsers.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'No matching active auditees were found for the supplied emails',
+        missingEmails
+      });
+    }
+
+    const requests = [];
+    for (const email of normalizedEmails) {
+      const auditee = auditeeByEmail.get(email);
+      if (!auditee) continue;
+
+      const auditeeConfig = Array.isArray(auditees)
+        ? auditees.find((item) => String(item?.email || '').trim().toLowerCase() === email)
+        : null;
+
+      const request = await createDocumentRequestForAuditee({
+        requester: req.user,
+        auditee,
+        linkedAuditPlan,
+        title,
+        description,
+        category,
+        priority,
+        department,
+        dueDate,
+        metadata: {
+          ...(metadata || {}),
+          batchRequest: true,
+          batchEmail: email
+        },
+        recipientEmail: auditeeConfig?.email || email,
+        folderName,
+        folderKey,
+        documentTitles: Array.isArray(auditeeConfig?.documentTitles) && auditeeConfig.documentTitles.length > 0
+          ? auditeeConfig.documentTitles
+          : documentTitles
+      });
+
+      requests.push(request);
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Bulk document requests created successfully',
+      count: requests.length,
+      data: requests,
+      missingEmails
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Error creating bulk document requests',
+      error: error.message
+    });
+  }
+});
+
 router.post('/document-requests', hasRoleLevel('team_member'), async (req, res) => {
   try {
     const {
@@ -975,7 +1164,7 @@ router.post('/document-requests', hasRoleLevel('team_member'), async (req, res) 
       attributes: ['id', 'name', 'role', 'department', 'isActive', 'email']
     });
 
-    if (!auditee || !auditee.isActive) {
+    if (!auditee || !auditee.isActive || auditee.role !== 'auditee') {
       return res.status(404).json({
         success: false,
         message: 'Assigned auditee not found'
@@ -995,47 +1184,21 @@ router.post('/document-requests', hasRoleLevel('team_member'), async (req, res) 
       });
     }
 
-    const effectiveDepartment = department || auditee.department || linkedAuditPlan?.department || req.user.department || null;
-    const effectiveFolderKey = folderKey || (folderName ? String(folderName).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') : null);
-    const requestedItems = normalizeRequestedItems(title, documentTitles);
-
-    const request = await DocumentRequest.create({
-      requestNumber: buildDocumentRequestNumber(),
-      title: title.trim(),
-      description: description || null,
-      category: category || 'governance',
-      priority: priority || 'medium',
-      recipientEmail: recipientEmail || auditee.email || null,
-      folderName: folderName || 'governance-documents',
-      folderKey: effectiveFolderKey,
-      requestedItems,
-      requestedBy: req.user.id,
-      assignedTo: auditee.id,
-      auditPlanId: linkedAuditPlan?.id || null,
-      department: effectiveDepartment,
-      dueDate: dueDate || null,
-      metadata: {
-        ...(metadata || {}),
-        createdByName: req.user.name,
-        createdByRole: req.user.role,
-        requestedItemCount: requestedItems.length
-      }
-    });
-
-    await Notification.create({
-      userId: auditee.id,
-      type: 'assignment',
-      title: 'New governance document request assigned',
-      message: `${req.user.name} requested ${request.title}.`,
-      auditPlanId: request.auditPlanId || null,
-      documentRequestId: request.id,
-      metadata: {
-        documentRequestId: request.id,
-        status: request.status,
-        requestedBy: req.user.id,
-        requestedByName: req.user.name,
-        requestedItems
-      }
+    const request = await createDocumentRequestForAuditee({
+      requester: req.user,
+      auditee,
+      linkedAuditPlan,
+      title,
+      description,
+      category,
+      priority,
+      department,
+      dueDate,
+      metadata,
+      recipientEmail,
+      folderName,
+      folderKey,
+      documentTitles
     });
 
     return res.status(201).json({
@@ -1051,7 +1214,6 @@ router.post('/document-requests', hasRoleLevel('team_member'), async (req, res) 
     });
   }
 });
-
 router.get('/document-requests', hasRoleLevel('team_member'), async (req, res) => {
   try {
     const { status, assignedTo, search, mineOnly } = req.query;

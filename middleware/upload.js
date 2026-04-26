@@ -62,6 +62,20 @@ const auditMethodologyStorage = new CloudinaryStorage({
   }
 });
 
+const boardSupportingDocumentStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: async (req, file) => {
+    const userId = req.user?.id || 'bac';
+    const planId = req.params?.id || 'annual-plan';
+
+    return {
+      folder: 'kovapage/board-supporting-documents',
+      public_id: `board-supporting-document-${planId}-${userId}-${Date.now()}`,
+      resource_type: 'raw'
+    };
+  }
+});
+
 const fileFilter = (req, file, cb) => {
   const extname = path.extname(file.originalname).toLowerCase();
 
@@ -139,6 +153,12 @@ const uploadAuditMethodologyDocument = multer({
   fileFilter: fileFilter
 });
 
+const uploadBoardSupportingDocument = multer({
+  storage: boardSupportingDocumentStorage,
+  limits: { fileSize: 20 * 1024 * 1024 },
+  fileFilter: fileFilter
+});
+
 const upload = multer({
   storage: profilePhotoStorage,
   limits: { fileSize: 10 * 1024 * 1024 },
@@ -165,6 +185,7 @@ module.exports = {
   uploadRiskData,
   uploadAuditeeDocument,
   uploadAuditMethodologyDocument,
+  uploadBoardSupportingDocument,
   upload,
   deleteFromCloudinary
 };
