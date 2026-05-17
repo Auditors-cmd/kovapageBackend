@@ -53,6 +53,42 @@ const checkDepartmentAccess = (req, resourceDepartment = null) => {
   return resourceDepartment === req.user.department;
 };
 
+const validateRiskAssessmentLink = async ({ riskAssessmentId, req, scopedDepartment = null }) => {
+  if (!riskAssessmentId) {
+    return { riskAssessment: null };
+  }
+
+  const assessment = await RiskAssessment.findByPk(riskAssessmentId);
+  if (!assessment) {
+    return {
+      error: {
+        status: 400,
+        message: 'The selected risk assessment does not exist'
+      }
+    };
+  }
+
+  if (req.user.role === 'unit_head' && !checkDepartmentAccess(req, assessment.department)) {
+    return {
+      error: {
+        status: 403,
+        message: 'You can only link risk assessments from your own department'
+      }
+    };
+  }
+
+  if (scopedDepartment && assessment.department && assessment.department !== scopedDepartment) {
+    return {
+      error: {
+        status: 400,
+        message: 'The selected risk assessment belongs to a different department'
+      }
+    };
+  }
+
+  return { riskAssessment: assessment };
+};
+
 const generateApmPlanNumber = () => {
   const now = new Date();
   const year = now.getFullYear();
@@ -388,6 +424,18 @@ router.post('/apm', async (req, res) => {
       });
     }
 
+    const linkedRiskAssessment = await validateRiskAssessmentLink({
+      riskAssessmentId,
+      req,
+      scopedDepartment
+    });
+    if (linkedRiskAssessment.error) {
+      return res.status(linkedRiskAssessment.error.status).json({
+        success: false,
+        message: linkedRiskAssessment.error.message
+      });
+    }
+
     const isSubmitting = submitForApproval === true;
     const nextStatus = isSubmitting ? 'under_review' : 'draft';
     const apmStatus = isSubmitting ? 'pending_approval' : 'draft';
@@ -402,7 +450,7 @@ router.post('/apm', async (req, res) => {
       auditPeriod: auditPeriod || null,
       startDate: startDate || null,
       endDate: endDate || null,
-      riskAssessmentId: riskAssessmentId || null,
+      riskAssessmentId: linkedRiskAssessment.riskAssessment?.id || null,
       teamLeadId: teamLeadId || null,
       teamMemberIds: finalTeamMembers,
       budget: budget !== undefined ? parseFloat(budget) || 0 : null,
@@ -563,6 +611,20 @@ router.put('/apm/:id', async (req, res) => {
       deliverables,
       notes
     } = req.body;
+
+    if (riskAssessmentId !== undefined) {
+      const linkedRiskAssessment = await validateRiskAssessmentLink({
+        riskAssessmentId,
+        req,
+        scopedDepartment: apm.department || null
+      });
+      if (linkedRiskAssessment.error) {
+        return res.status(linkedRiskAssessment.error.status).json({
+          success: false,
+          message: linkedRiskAssessment.error.message
+        });
+      }
+    }
 
     const updates = {};
     if (title !== undefined) updates.title = title;
