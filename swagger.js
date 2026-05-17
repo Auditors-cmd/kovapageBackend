@@ -4616,6 +4616,60 @@ Object.assign(swaggerDocument.paths, {
       tags: ['Team Lead'],
       security: [{ bearerAuth: [] }],
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                basicInformation: {
+                  type: 'object',
+                  properties: {
+                    auditTitle: { type: 'string', example: 'FY 2026 Treasury Audit' },
+                    auditClassification: { type: 'string', example: 'Compliance' },
+                    durationDays: { type: 'integer', example: 30 }
+                  }
+                },
+                unitBackgroundDescription: { type: 'string', example: 'Treasury manages liquidity, settlements, and banking relationships.' },
+                objectives: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      text: { type: 'string', example: 'Assess treasury controls over reconciliations and cash management.' }
+                    }
+                  }
+                },
+                scopeOfReview: { type: 'string', example: 'Review treasury operations, approvals, reconciliations, and liquidity monitoring.' },
+                raca: {
+                  type: 'object',
+                  properties: {
+                    riskAnalysis: { type: 'string', example: 'Risks include unauthorized payments and weak reconciliation controls.' },
+                    controlAnalysis: { type: 'string', example: 'Controls include approval workflows, supervisory review, and segregation of duties.' }
+                  }
+                },
+                auditApproach: { type: 'string', example: 'Risk-based approach using walkthroughs, sampling, and control testing.' },
+                auditProcess: { type: 'string', example: 'Week 1 planning, Week 2 fieldwork, Week 3 issue validation and reporting.' },
+                testProcedures: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      testObjective: { type: 'string', example: 'Confirm bank reconciliations are prepared and reviewed daily.' },
+                      testProcedure: { type: 'string', example: 'Inspect sampled reconciliations and trace exceptions to evidence of resolution.' },
+                      assignedTo: { type: 'string', format: 'uuid', example: '07643bfe-9ec0-4cd0-bc49-30b1a1480e30' },
+                      area: { type: 'string', example: 'Treasury Reconciliations' },
+                      controlReference: { type: 'string', example: 'TREAS-CTRL-01' },
+                      dueDate: { type: 'string', format: 'date-time', example: '2026-06-01T00:00:00.000Z' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       responses: { '200': { description: 'Team Lead planning workspace updated' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
     }
   },
@@ -4625,6 +4679,20 @@ Object.assign(swaggerDocument.paths, {
       tags: ['Team Lead'],
       security: [{ bearerAuth: [] }],
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                text: { type: 'string', example: 'Evaluate treasury cash management controls.' }
+              },
+              required: ['text']
+            }
+          }
+        }
+      },
       responses: { '201': { description: 'Audit objective added' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
     }
   },
@@ -4655,6 +4723,25 @@ Object.assign(swaggerDocument.paths, {
       tags: ['Team Lead'],
       security: [{ bearerAuth: [] }],
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: true,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                testObjective: { type: 'string', example: 'Confirm reconciliations are reviewed daily.' },
+                testProcedure: { type: 'string', example: 'Inspect sampled reconciliations and supporting sign-off evidence.' },
+                assignedTo: { type: 'string', format: 'uuid', example: '07643bfe-9ec0-4cd0-bc49-30b1a1480e30' },
+                area: { type: 'string', example: 'Treasury Reconciliations' },
+                controlReference: { type: 'string', example: 'TREAS-CTRL-01' },
+                dueDate: { type: 'string', format: 'date-time', example: '2026-06-01T00:00:00.000Z' }
+              },
+              required: ['testObjective', 'testProcedure']
+            }
+          }
+        }
+      },
       responses: { '201': { description: 'Planning procedure added' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
     }
   },
@@ -4686,6 +4773,26 @@ Object.assign(swaggerDocument.paths, {
       tags: ['Team Lead'],
       security: [{ bearerAuth: [] }],
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: false,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              additionalProperties: true,
+              example: {
+                basicInformation: {
+                  auditTitle: 'FY 2026 Treasury Audit',
+                  auditClassification: 'Compliance',
+                  durationDays: 30
+                },
+                unitBackgroundDescription: 'Draft narrative for the treasury unit.',
+                objectives: [{ text: 'Assess treasury controls.' }]
+              }
+            }
+          }
+        }
+      },
       responses: { '200': { description: 'Planning draft saved' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
     }
   },
@@ -4695,6 +4802,59 @@ Object.assign(swaggerDocument.paths, {
       tags: ['Team Lead'],
       security: [{ bearerAuth: [] }],
       parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }],
+      requestBody: {
+        required: false,
+        content: {
+          'application/json': {
+            schema: {
+              type: 'object',
+              properties: {
+                notes: { type: 'string', example: 'Submitting completed APM for approval.' },
+                targetRole: { type: 'string', enum: ['unit_head', 'quality_assurance', 'chief_audit_executive'], example: 'unit_head' },
+                basicInformation: {
+                  type: 'object',
+                  properties: {
+                    auditTitle: { type: 'string', example: 'FY 2026 Treasury Audit' },
+                    auditClassification: { type: 'string', example: 'Compliance' },
+                    durationDays: { type: 'integer', example: 30 }
+                  }
+                },
+                unitBackgroundDescription: { type: 'string', example: 'Treasury manages liquidity, settlements, and banking relationships.' },
+                objectives: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      text: { type: 'string', example: 'Assess treasury controls over reconciliations and cash management.' }
+                    }
+                  }
+                },
+                scopeOfReview: { type: 'string', example: 'Review treasury operations, approvals, reconciliations, and liquidity monitoring.' },
+                raca: {
+                  type: 'object',
+                  properties: {
+                    riskAnalysis: { type: 'string', example: 'Risks include unauthorized payments and weak reconciliation controls.' },
+                    controlAnalysis: { type: 'string', example: 'Controls include approval workflows, supervisory review, and segregation of duties.' }
+                  }
+                },
+                auditApproach: { type: 'string', example: 'Risk-based approach using walkthroughs, sampling, and control testing.' },
+                auditProcess: { type: 'string', example: 'Week 1 planning, Week 2 fieldwork, Week 3 issue validation and reporting.' },
+                testProcedures: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      testObjective: { type: 'string', example: 'Confirm bank reconciliations are prepared and reviewed daily.' },
+                      testProcedure: { type: 'string', example: 'Inspect sampled reconciliations and trace exceptions to evidence of resolution.' },
+                      assignedTo: { type: 'string', format: 'uuid', example: '07643bfe-9ec0-4cd0-bc49-30b1a1480e30' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
       responses: { '200': { description: 'Planning workspace submitted for approval' }, '400': { description: 'Invalid request' }, '404': { $ref: '#/components/responses/NotFound' } }
     }
   },
